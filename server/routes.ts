@@ -77,6 +77,26 @@ async function fetchRepoRecentCommits(repo: Repository, count = 10): Promise<{ n
   }
 }
 
+async function getRepoBranchAndLatestSha(repo: Repository): Promise<{ defaultBranch: string; latestSha: string | null }> {
+  if (!repo.token || !repo.owner || !repo.repo) return { defaultBranch: "main", latestSha: null };
+  try {
+    const headers = await fetchGitHubHeaders(repo.token);
+    const repoRes = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}`, { headers });
+    if (!repoRes.ok) return { defaultBranch: "main", latestSha: null };
+    const repoInfo = await repoRes.json();
+    const defaultBranch = repoInfo.default_branch || "main";
+    const commitsRes = await fetch(
+      `https://api.github.com/repos/${repo.owner}/${repo.repo}/commits/${defaultBranch}`,
+      { headers }
+    );
+    if (!commitsRes.ok) return { defaultBranch, latestSha: null };
+    const commitsData = await commitsRes.json();
+    return { defaultBranch, latestSha: commitsData.sha || null };
+  } catch {
+    return { defaultBranch: "main", latestSha: null };
+  }
+}
+
 async function fetchFileFromRepo(repo: Repository, filePath: string): Promise<string | null> {
   if (!repo.token || !repo.owner || !repo.repo) return null;
   try {
@@ -632,6 +652,10 @@ Type: ${task.type} | Priority: ${task.priority}`;
 
     const loadedFiles: { path: string; content: string; source: string }[] = [];
     const loadedFilePaths: string[] = [];
+    let defaultBranch = "main";
+    let latestSha: string | null = null;
+
+    const cacheBustRef = () => (isReverification && latestSha ? latestSha : defaultBranch);
 
     async function fetchFileFromGitHub(filePath: string): Promise<string | null> {
       if (!repo || !repo.token || !repo.owner || !repo.repo) {
@@ -640,14 +664,17 @@ Type: ${task.type} | Priority: ${task.priority}`;
       }
       try {
         const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
-        const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=main&t=${Date.now()}`;
-        console.log(`[DISCUSS] fetchFileFromGitHub(${filePath}): fetching from ${repo.owner}/${repo.repo}`);
+        const ref = cacheBustRef();
+        const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}&_=${Date.now()}`;
+        console.log(`[DISCUSS] fetchFileFromGitHub(${filePath}): fetching from ${repo.owner}/${repo.repo} ref=${ref}`);
         const ghRes = await fetch(url, {
           headers: {
             Authorization: `token ${repo.token}`,
             Accept: "application/vnd.github.v3+json",
             "User-Agent": "AI-Dev-Hub",
-            ...(isReverification ? { "Cache-Control": "no-cache" } : {}),
+            ...(isReverification
+              ? { "Cache-Control": "no-store, no-cache", Pragma: "no-cache" }
+              : {}),
           },
         });
         if (!ghRes.ok) {
@@ -689,6 +716,13 @@ Type: ${task.type} | Priority: ${task.priority}`;
       }
     }
     console.log(`[DISCUSS] Final repo: ${repo ? `${repo.owner}/${repo.repo}` : 'NONE'}`);
+
+    if (repo && isReverification) {
+      const branchAndSha = await getRepoBranchAndLatestSha(repo);
+      defaultBranch = branchAndSha.defaultBranch;
+      latestSha = branchAndSha.latestSha;
+      console.log(`[DISCUSS] Re-verification: using ref=${latestSha || defaultBranch} (branch=${defaultBranch}, sha=${latestSha ? "present" : "none"})`);
+    }
 
     if (!isAutoAnalysis && task.filePath && repo) {
       console.log(`[DISCUSS] Fetching task.filePath: ${task.filePath}`);
