@@ -1,0 +1,48 @@
+{
+  "name": "AI Dev Hub",
+  "short_name": "DevHub",
+  "description": "AI-powered development operations hub for managing projects, tasks, and code",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#58a6ff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["productivity", "developer-tools"],
+  "shortcuts": [
+    {
+      "name": "Inbox",
+      "url": "/?view=inbox",
+      "description": "View inbox items"
+    },
+    {
+      "name": "Manager",
+      "url": "/?view=manager",
+      "description": "Talk to AI Manager"
+    },
+    {
+      "name": "All Tasks",
+      "url": "/?view=tasks",
+      "description": "View all tasks"
+    }
+  ]
+}

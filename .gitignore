@@ -1,0 +1,8 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gzdata/store.json
+attached_assets/
+data/
