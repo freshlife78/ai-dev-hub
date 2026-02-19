@@ -82,6 +82,12 @@ export const taskTypeEnum = z.enum(["Bug", "Feature", "Task"]);
 export const taskStatusEnum = z.enum(["Open", "In Progress", "Quality Review", "Done"]);
 export const taskPriorityEnum = z.enum(["High", "Medium", "Low"]);
 
+export const aiModelEnum = z.enum([
+  "claude-sonnet-4-5-20250929",
+  "claude-haiku-3-5-20241022",
+  "claude-opus-4-20250514",
+]);
+
 export const discussionMessageSchema = z.object({
   id: z.string(),
   sender: z.enum(["user", "claude"]),
@@ -90,9 +96,17 @@ export const discussionMessageSchema = z.object({
   filesLoaded: z.array(z.string()).optional().default([]),
   isAutoAnalysis: z.boolean().optional().default(false),
   isReverification: z.boolean().optional().default(false),
+  model: aiModelEnum.optional(),
 });
 
 export type DiscussionMessage = z.infer<typeof discussionMessageSchema>;
+export type AIModel = z.infer<typeof aiModelEnum>;
+
+export const AI_MODELS: { id: AIModel; label: string; description: string }[] = [
+  { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5", description: "Fast & capable" },
+  { id: "claude-haiku-3-5-20241022", label: "Claude Haiku 3.5", description: "Fastest responses" },
+  { id: "claude-opus-4-20250514", label: "Claude Opus 4", description: "Most capable" },
+];
 
 export const autoAnalysisResultEnum = z.enum(["complete", "incomplete", "partial"]);
 

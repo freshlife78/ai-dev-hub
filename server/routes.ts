@@ -541,10 +541,11 @@ Type: ${task.type} | Priority: ${task.priority}`;
   });
 
   app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/discuss", async (req, res) => {
-    const { message, includeTaskContext, isAutoAnalysis, isReanalysis } = req.body;
+    const { message, includeTaskContext, isAutoAnalysis, isReanalysis, model } = req.body;
     if (!message || typeof message !== "string") {
       return res.status(400).json({ message: "message is required" });
     }
+    const selectedModel = model || "claude-sonnet-4-5-20250929";
 
     const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
@@ -853,7 +854,7 @@ Example of the tone to aim for:
     try {
       const anthropic = new Anthropic({ apiKey });
       const aiMsg = await anthropic.messages.create({
-        model: "claude-sonnet-4-5-20250929",
+        model: selectedModel,
         max_tokens: 2048,
         system: systemPrompt,
         messages: [
@@ -869,6 +870,7 @@ Example of the tone to aim for:
 
       await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
         sender: "claude",
+        model: selectedModel,
         content: responseText,
         timestamp: new Date().toISOString(),
         filesLoaded: (isAutoAnalysis || isReverification) ? loadedFilePaths : [],
