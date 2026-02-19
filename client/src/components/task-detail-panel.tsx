@@ -483,7 +483,7 @@ ${task.fixSteps}`;
   };
 
   return (
-    <div className="w-[400px] flex flex-col border-l border-border bg-background shrink-0">
+    <div className={`${activeTab === "discussion" ? "w-[520px]" : "w-[400px]"} flex flex-col border-l border-border bg-background shrink-0 transition-all duration-200`}>
       <div className="flex items-center justify-between gap-2 p-4 border-b border-border">
         <div className="flex items-center gap-2 min-w-0">
           <span className="font-mono text-xs text-muted-foreground" data-testid="detail-task-id">
@@ -764,201 +764,178 @@ ${task.fixSteps}`;
         const currentModelInfo = AI_MODELS.find(m => m.id === selectedModel) || AI_MODELS[0];
 
         return (
-          <div className="flex-1 flex min-h-0">
-            {/* File Context Sidebar */}
-            {filesPanelOpen && allFiles.length > 0 && (
-              <div className="w-52 border-r border-border flex flex-col shrink-0 bg-muted/30">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-                  <div className="flex items-center gap-1.5">
-                    <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Context Files</span>
+          <div className="flex-1 flex flex-col min-h-0">
+            {/* Collapsible File Context Strip */}
+            {allFiles.length > 0 && (
+              <div className="border-b border-border">
+                <button
+                  className="flex items-center justify-between w-full px-4 py-2 hover:bg-muted/50 transition-colors"
+                  onClick={() => setFilesPanelOpen(!filesPanelOpen)}
+                  data-testid="button-toggle-files-panel"
+                >
+                  <div className="flex items-center gap-2">
+                    <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      {allFiles.length} context file{allFiles.length !== 1 ? "s" : ""}
+                    </span>
                   </div>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="w-5 h-5"
-                    onClick={() => setFilesPanelOpen(false)}
-                    data-testid="button-close-files-panel"
-                  >
-                    <PanelLeftClose className="w-3 h-3" />
-                  </Button>
-                </div>
-                <ScrollArea className="flex-1">
-                  <div className="p-2 space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-5 px-1.5 text-[10px]"
+                      onClick={(e) => { e.stopPropagation(); handleRefreshFiles(); }}
+                      disabled={discussMutation.isPending}
+                      data-testid="button-refresh-files"
+                    >
+                      {discussMutation.isPending ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3 h-3" />
+                      )}
+                    </Button>
+                    {filesPanelOpen ? <ChevronUp className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+                  </div>
+                </button>
+                {filesPanelOpen && (
+                  <div className="px-4 pb-2 flex flex-wrap gap-1.5">
                     {allFiles.map((file, i) => (
-                      <div
-                        key={file.path}
-                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-md hover:bg-muted/80 group cursor-default"
-                        data-testid={`file-context-${i}`}
-                      >
-                        <FileCode className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="text-[11px] font-mono truncate text-foreground/80">{file.path.split('/').pop()}</span>
-                          </TooltipTrigger>
-                          <TooltipContent side="right" className="text-xs font-mono">
-                            {file.path}
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
+                      <Tooltip key={file.path}>
+                        <TooltipTrigger asChild>
+                          <div
+                            className="inline-flex items-center gap-1.5 bg-muted/60 hover:bg-muted rounded-md px-2 py-1 cursor-default"
+                            data-testid={`file-context-${i}`}
+                          >
+                            <FileCode className="w-3 h-3 text-blue-400 shrink-0" />
+                            <span className="text-[10px] font-mono text-foreground/80">{file.path.split('/').pop()}</span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="text-[10px] font-mono">
+                          {file.path}
+                        </TooltipContent>
+                      </Tooltip>
                     ))}
                   </div>
-                </ScrollArea>
-                <div className="px-3 py-2 border-t border-border">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="w-full text-[10px] h-7"
-                    onClick={handleRefreshFiles}
-                    disabled={discussMutation.isPending}
-                    data-testid="button-refresh-files"
-                  >
-                    {discussMutation.isPending ? (
-                      <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="w-3 h-3 mr-1.5" />
-                    )}
-                    Refresh Files
-                  </Button>
-                </div>
+                )}
               </div>
             )}
 
-            {/* Main Chat Area */}
-            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-              {/* Chat Header */}
-              {discussion.length > 0 && (
-                <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-border">
-                  <div className="flex items-center gap-2">
-                    {(!filesPanelOpen || allFiles.length === 0) && allFiles.length > 0 && (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="w-6 h-6"
-                        onClick={() => setFilesPanelOpen(true)}
-                        data-testid="button-open-files-panel"
-                      >
-                        <PanelLeftOpen className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
-                    <span className="text-[10px] text-muted-foreground">{discussion.length} message{discussion.length !== 1 ? "s" : ""}</span>
-                    {allFiles.length > 0 && (
-                      <Badge variant="secondary" className="text-[9px] gap-1">
-                        <FileCode className="w-2.5 h-2.5" />
-                        {allFiles.length} file{allFiles.length !== 1 ? "s" : ""}
-                      </Badge>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-6 text-[10px]"
-                    onClick={handleRefreshFiles}
-                    disabled={discussMutation.isPending}
-                    data-testid="button-refresh-files-header"
-                  >
-                    {discussMutation.isPending ? (
-                      <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                    ) : (
-                      <RefreshCw className="w-3 h-3 mr-1" />
-                    )}
-                    Refresh
-                  </Button>
-                </div>
-              )}
-
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto">
-                <div className="p-4 space-y-4">
-                  {discussionLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-                    </div>
-                  ) : discussion.length === 0 && discussMutation.isPending && autoAnalysisTriggered ? (
-                    renderAutoAnalysisLoading()
-                  ) : discussion.length === 0 && autoAnalysisError ? (
-                    renderAutoAnalysisError()
-                  ) : discussion.length === 0 ? (
-                    <div className="text-center py-8 space-y-2">
-                      <MessageSquare className="w-8 h-8 mx-auto text-muted-foreground/40" />
-                      <p className="text-xs text-muted-foreground">No discussion yet.</p>
-                      <p className="text-xs text-muted-foreground/70">Ask a question about this task to start a conversation with AI. Mention file paths to load them into context.</p>
-                    </div>
+            {/* Chat Header */}
+            {discussion.length > 0 && (
+              <div className="flex items-center justify-between px-4 py-1.5 border-b border-border bg-muted/20">
+                <span className="text-[10px] text-muted-foreground">
+                  {discussion.length} message{discussion.length !== 1 ? "s" : ""}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 text-[10px] gap-1"
+                  onClick={handleRefreshFiles}
+                  disabled={discussMutation.isPending}
+                  data-testid="button-refresh-files-header"
+                >
+                  {discussMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
-                    discussion.map((msg, i) => renderMessage(msg, i))
+                    <RefreshCw className="w-3 h-3" />
                   )}
-                  {discussMutation.isPending && discussion.length > 0 && (
-                    <div className="flex gap-2.5">
-                      <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 bg-muted">
-                        <Bot className="w-3 h-3 text-muted-foreground" />
+                  Refresh Files
+                </Button>
+              </div>
+            )}
+
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-4 space-y-4">
+                {discussionLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : discussion.length === 0 && discussMutation.isPending && autoAnalysisTriggered ? (
+                  renderAutoAnalysisLoading()
+                ) : discussion.length === 0 && autoAnalysisError ? (
+                  renderAutoAnalysisError()
+                ) : discussion.length === 0 ? (
+                  <div className="text-center py-8 space-y-2">
+                    <MessageSquare className="w-8 h-8 mx-auto text-muted-foreground/40" />
+                    <p className="text-xs text-muted-foreground">No discussion yet.</p>
+                    <p className="text-xs text-muted-foreground/70">Ask a question about this task to start a conversation with AI. Mention file paths to load them into context.</p>
+                  </div>
+                ) : (
+                  discussion.map((msg, i) => renderMessage(msg, i))
+                )}
+                {discussMutation.isPending && discussion.length > 0 && (
+                  <div className="flex gap-2.5">
+                    <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 bg-muted">
+                      <Bot className="w-3 h-3 text-muted-foreground" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[10px] font-medium text-muted-foreground">{currentModelInfo.label}</span>
                       </div>
-                      <div className="flex-1">
-                        <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[10px] font-medium text-muted-foreground">{currentModelInfo.label}</span>
-                        </div>
-                        <div className="bg-muted rounded-md p-3 inline-flex items-center gap-2">
-                          <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                          <span className="text-xs text-muted-foreground">Thinking...</span>
-                        </div>
+                      <div className="bg-muted rounded-md p-3 inline-flex items-center gap-2">
+                        <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground">Thinking...</span>
                       </div>
                     </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
+            </div>
 
-              {/* Input Area with Model Selector */}
-              <div className="border-t border-border p-3 space-y-2">
-                <div className="flex gap-2">
-                  <Textarea
-                    placeholder="Ask about this task..."
-                    className="text-xs resize-none flex-1 min-h-[36px]"
-                    rows={2}
-                    value={discussionInput}
-                    onChange={(e) => setDiscussionInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    disabled={discussMutation.isPending}
-                    data-testid="input-discussion"
-                  />
-                  <Button
-                    size="icon"
-                    onClick={handleSendMessage}
-                    disabled={!discussionInput.trim() || discussMutation.isPending}
-                    data-testid="button-send-discussion"
-                  >
-                    {discussMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                  </Button>
-                </div>
-                <div className="flex items-center justify-between">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="sm" className="h-6 gap-1.5 text-[10px] text-muted-foreground hover:text-foreground" data-testid="button-model-selector">
-                        <BrainCircuit className="w-3 h-3" />
-                        {currentModelInfo.label}
-                        <ChevronDown className="w-2.5 h-2.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56">
-                      {AI_MODELS.map(m => (
-                        <DropdownMenuItem
-                          key={m.id}
-                          onClick={() => setSelectedModel(m.id)}
-                          className={`flex items-center justify-between ${selectedModel === m.id ? "bg-accent" : ""}`}
-                          data-testid={`model-option-${m.id}`}
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-xs font-medium">{m.label}</span>
-                            <span className="text-[10px] text-muted-foreground">{m.description}</span>
-                          </div>
-                          {selectedModel === m.id && (
-                            <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          )}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <p className="text-[10px] text-muted-foreground/50">Enter to send · Mention file paths to load them</p>
-                </div>
+            {/* Input Area with Model Selector */}
+            <div className="border-t border-border p-3">
+              <div className="flex gap-2">
+                <Textarea
+                  placeholder="Ask about this task..."
+                  className="text-xs resize-none flex-1 min-h-[36px]"
+                  rows={2}
+                  value={discussionInput}
+                  onChange={(e) => setDiscussionInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  disabled={discussMutation.isPending}
+                  data-testid="input-discussion"
+                />
+                <Button
+                  size="icon"
+                  onClick={handleSendMessage}
+                  disabled={!discussionInput.trim() || discussMutation.isPending}
+                  className="shrink-0"
+                  data-testid="button-send-discussion"
+                >
+                  {discussMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </Button>
+              </div>
+              <div className="flex items-center justify-between mt-1.5">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-5 gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5" data-testid="button-model-selector">
+                      <BrainCircuit className="w-3 h-3" />
+                      {currentModelInfo.label}
+                      <ChevronDown className="w-2.5 h-2.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52">
+                    {AI_MODELS.map(m => (
+                      <DropdownMenuItem
+                        key={m.id}
+                        onClick={() => setSelectedModel(m.id)}
+                        className={`flex items-center justify-between ${selectedModel === m.id ? "bg-accent" : ""}`}
+                        data-testid={`model-option-${m.id}`}
+                      >
+                        <div className="flex flex-col">
+                          <span className="text-xs font-medium">{m.label}</span>
+                          <span className="text-[10px] text-muted-foreground">{m.description}</span>
+                        </div>
+                        {selectedModel === m.id && (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <span className="text-[9px] text-muted-foreground/40">Enter to send</span>
               </div>
             </div>
           </div>
