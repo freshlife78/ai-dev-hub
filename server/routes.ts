@@ -171,10 +171,10 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  seedData();
+  await seedData();
 
   // Health check endpoint
-  app.get("/api/health", (_req, res) => {
+  app.get("/api/health", async (_req, res) => {
     res.json({ 
       status: "ok", 
       timestamp: new Date().toISOString(),
@@ -182,78 +182,78 @@ export async function registerRoutes(
     });
   });
 
-  app.get("/api/businesses", (_req, res) => {
-    res.json(storage.getBusinesses());
+  app.get("/api/businesses", async (_req, res) => {
+    res.json(await storage.getBusinesses());
   });
 
-  app.post("/api/businesses", (req, res) => {
+  app.post("/api/businesses", async (req, res) => {
     try {
       const data = insertBusinessSchema.parse(req.body);
-      const biz = storage.createBusiness(data);
+      const biz = await storage.createBusiness(data);
       res.status(201).json(biz);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
   });
 
-  app.get("/api/businesses/:bizId", (req, res) => {
-    const biz = storage.getBusiness(req.params.bizId);
+  app.get("/api/businesses/:bizId", async (req, res) => {
+    const biz = await storage.getBusiness(req.params.bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
     res.json(biz);
   });
 
-  app.put("/api/businesses/:bizId", (req, res) => {
-    const updated = storage.updateBusiness(req.params.bizId, req.body);
+  app.put("/api/businesses/:bizId", async (req, res) => {
+    const updated = await storage.updateBusiness(req.params.bizId, req.body);
     if (!updated) return res.status(404).json({ message: "Business not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId", (req, res) => {
-    const deleted = storage.deleteBusiness(req.params.bizId);
+  app.delete("/api/businesses/:bizId", async (req, res) => {
+    const deleted = await storage.deleteBusiness(req.params.bizId);
     if (!deleted) return res.status(404).json({ message: "Business not found" });
     res.json({ success: true });
   });
 
-  app.get("/api/businesses/:bizId/repositories", (req, res) => {
-    res.json(storage.getRepositories(req.params.bizId));
+  app.get("/api/businesses/:bizId/repositories", async (req, res) => {
+    res.json(await storage.getRepositories(req.params.bizId));
   });
 
-  app.post("/api/businesses/:bizId/repositories", (req, res) => {
+  app.post("/api/businesses/:bizId/repositories", async (req, res) => {
     try {
       const data = insertRepositorySchema.parse(req.body);
-      const repo = storage.createRepository(req.params.bizId, data);
+      const repo = await storage.createRepository(req.params.bizId, data);
       res.status(201).json(repo);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
   });
 
-  app.get("/api/businesses/:bizId/repositories/:repoId", (req, res) => {
-    const repo = storage.getRepository(req.params.bizId, req.params.repoId);
+  app.get("/api/businesses/:bizId/repositories/:repoId", async (req, res) => {
+    const repo = await storage.getRepository(req.params.bizId, req.params.repoId);
     if (!repo) return res.status(404).json({ message: "Repository not found" });
     res.json(repo);
   });
 
-  app.put("/api/businesses/:bizId/repositories/:repoId", (req, res) => {
-    const updated = storage.updateRepository(req.params.bizId, req.params.repoId, req.body);
+  app.put("/api/businesses/:bizId/repositories/:repoId", async (req, res) => {
+    const updated = await storage.updateRepository(req.params.bizId, req.params.repoId, req.body);
     if (!updated) return res.status(404).json({ message: "Repository not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId/repositories/:repoId", (req, res) => {
-    const deleted = storage.deleteRepository(req.params.bizId, req.params.repoId);
+  app.delete("/api/businesses/:bizId/repositories/:repoId", async (req, res) => {
+    const deleted = await storage.deleteRepository(req.params.bizId, req.params.repoId);
     if (!deleted) return res.status(404).json({ message: "Repository not found" });
     res.json({ success: true });
   });
 
-  app.get("/api/businesses/:bizId/agents", (req, res) => {
-    res.json(storage.getBusinessAgents(req.params.bizId));
+  app.get("/api/businesses/:bizId/agents", async (req, res) => {
+    res.json(await storage.getBusinessAgents(req.params.bizId));
   });
 
-  app.post("/api/businesses/:bizId/agents", (req, res) => {
+  app.post("/api/businesses/:bizId/agents", async (req, res) => {
     const { name, type, apiKey, role, isReviewAgent } = req.body;
     if (!name || !type) return res.status(400).json({ message: "name and type are required" });
-    const agent = storage.addAgent(req.params.bizId, {
+    const agent = await storage.addAgent(req.params.bizId, {
       name,
       type: type || "Claude",
       apiKey: apiKey || "",
@@ -264,63 +264,63 @@ export async function registerRoutes(
     res.status(201).json(agent);
   });
 
-  app.put("/api/businesses/:bizId/agents/:agentId", (req, res) => {
-    const updated = storage.updateAgent(req.params.bizId, req.params.agentId, req.body);
+  app.put("/api/businesses/:bizId/agents/:agentId", async (req, res) => {
+    const updated = await storage.updateAgent(req.params.bizId, req.params.agentId, req.body);
     if (!updated) return res.status(404).json({ message: "Agent not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId/agents/:agentId", (req, res) => {
-    const deleted = storage.deleteAgent(req.params.bizId, req.params.agentId);
+  app.delete("/api/businesses/:bizId/agents/:agentId", async (req, res) => {
+    const deleted = await storage.deleteAgent(req.params.bizId, req.params.agentId);
     if (!deleted) return res.status(404).json({ message: "Agent not found" });
     res.json({ success: true });
   });
 
-  app.get("/api/businesses/:bizId/projects", (req, res) => {
-    res.json(storage.getProjects(req.params.bizId));
+  app.get("/api/businesses/:bizId/projects", async (req, res) => {
+    res.json(await storage.getProjects(req.params.bizId));
   });
 
-  app.post("/api/businesses/:bizId/projects", (req, res) => {
+  app.post("/api/businesses/:bizId/projects", async (req, res) => {
     try {
       const data = insertProjectSchema.parse(req.body);
-      const project = storage.createProject(req.params.bizId, data);
+      const project = await storage.createProject(req.params.bizId, data);
       res.status(201).json(project);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
   });
 
-  app.get("/api/businesses/:bizId/projects/:projectId", (req, res) => {
-    const project = storage.getProject(req.params.bizId, req.params.projectId);
+  app.get("/api/businesses/:bizId/projects/:projectId", async (req, res) => {
+    const project = await storage.getProject(req.params.bizId, req.params.projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
     res.json(project);
   });
 
-  app.put("/api/businesses/:bizId/projects/:projectId", (req, res) => {
-    const updated = storage.updateProject(req.params.bizId, req.params.projectId, req.body);
+  app.put("/api/businesses/:bizId/projects/:projectId", async (req, res) => {
+    const updated = await storage.updateProject(req.params.bizId, req.params.projectId, req.body);
     if (!updated) return res.status(404).json({ message: "Project not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId/projects/:projectId", (req, res) => {
-    const deleted = storage.deleteProject(req.params.bizId, req.params.projectId);
+  app.delete("/api/businesses/:bizId/projects/:projectId", async (req, res) => {
+    const deleted = await storage.deleteProject(req.params.bizId, req.params.projectId);
     if (!deleted) return res.status(404).json({ message: "Project not found" });
     res.json({ success: true });
   });
 
-  app.get("/api/businesses/:bizId/tasks", (req, res) => {
-    res.json(storage.getAllTasksForBusiness(req.params.bizId));
+  app.get("/api/businesses/:bizId/tasks", async (req, res) => {
+    res.json(await storage.getAllTasksForBusiness(req.params.bizId));
   });
 
-  app.get("/api/businesses/:bizId/projects/:projectId/tasks", (req, res) => {
-    const project = storage.getProject(req.params.bizId, req.params.projectId);
+  app.get("/api/businesses/:bizId/projects/:projectId/tasks", async (req, res) => {
+    const project = await storage.getProject(req.params.bizId, req.params.projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
-    res.json(storage.getTasks(req.params.projectId));
+    res.json(await storage.getTasks(req.params.projectId));
   });
 
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-import", (req, res) => {
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-import", async (req, res) => {
     try {
-      const project = storage.getProject(req.params.bizId, req.params.projectId);
+      const project = await storage.getProject(req.params.bizId, req.params.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
 
       const body = req.body;
@@ -366,7 +366,7 @@ export async function registerRoutes(
             generatedPrompts: [],
           };
 
-          const task = storage.createTask(req.params.projectId, taskData, raw.id);
+          const task = await storage.createTask(req.params.projectId, taskData, raw.id);
           imported.push(task.id);
         } catch (err: any) {
           errors.push(`Task ${i + 1} ("${raw.title || "unknown"}"): ${err.message}`);
@@ -384,73 +384,73 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks", (req, res) => {
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks", async (req, res) => {
     try {
-      const project = storage.getProject(req.params.bizId, req.params.projectId);
+      const project = await storage.getProject(req.params.bizId, req.params.projectId);
       if (!project) return res.status(404).json({ message: "Project not found" });
       const data = insertTaskSchema.parse(req.body);
-      const task = storage.createTask(req.params.projectId, data);
+      const task = await storage.createTask(req.params.projectId, data);
       res.status(201).json(task);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
   });
 
-  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", (req, res) => {
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", async (req, res) => {
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
     res.json(task);
   });
 
-  app.put("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", (req, res) => {
-    const updated = storage.updateTask(req.params.projectId, req.params.taskId, req.body, req.params.bizId);
+  app.put("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", async (req, res) => {
+    const updated = await storage.updateTask(req.params.projectId, req.params.taskId, req.body, req.params.bizId);
     if (!updated) return res.status(404).json({ message: "Task not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", (req, res) => {
-    const deleted = storage.deleteTask(req.params.projectId, req.params.taskId);
+  app.delete("/api/businesses/:bizId/projects/:projectId/tasks/:taskId", async (req, res) => {
+    const deleted = await storage.deleteTask(req.params.projectId, req.params.taskId);
     if (!deleted) return res.status(404).json({ message: "Task not found" });
     res.json({ success: true });
   });
 
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/move", (req, res) => {
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/move", async (req, res) => {
     const { targetProjectId } = req.body;
     if (!targetProjectId) return res.status(400).json({ message: "targetProjectId is required" });
-    const fromProject = storage.getProject(req.params.bizId, req.params.projectId);
+    const fromProject = await storage.getProject(req.params.bizId, req.params.projectId);
     if (!fromProject) return res.status(404).json({ message: "Source project not found" });
-    const toProject = storage.getProject(req.params.bizId, targetProjectId);
+    const toProject = await storage.getProject(req.params.bizId, targetProjectId);
     if (!toProject) return res.status(404).json({ message: "Target project not found" });
     if (req.params.projectId === targetProjectId) return res.status(400).json({ message: "Task is already in this project" });
-    const task = storage.moveTask(req.params.projectId, targetProjectId, req.params.taskId);
+    const task = await storage.moveTask(req.params.projectId, targetProjectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
     res.json({ task, fromProject: fromProject.name, toProject: toProject.name });
   });
 
-  app.patch("/api/businesses/:bizId/projects/:projectId/bulk-update-repository", (req, res) => {
-    const project = storage.getProject(req.params.bizId, req.params.projectId);
+  app.patch("/api/businesses/:bizId/projects/:projectId/bulk-update-repository", async (req, res) => {
+    const project = await storage.getProject(req.params.bizId, req.params.projectId);
     if (!project) return res.status(404).json({ message: "Project not found" });
     const { repositoryId, onlyUnlinked } = req.body;
     if (!repositoryId) return res.status(400).json({ message: "repositoryId is required" });
-    const count = storage.bulkUpdateTasksRepository(req.params.projectId, repositoryId, !!onlyUnlinked);
+    const count = await storage.bulkUpdateTasksRepository(req.params.projectId, repositoryId, !!onlyUnlinked);
     res.json({ updated: count });
   });
 
-  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", (req, res) => {
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", async (req, res) => {
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
-    res.json(storage.getCodeReviews(req.params.taskId));
+    res.json(await storage.getCodeReviews(req.params.taskId));
   });
 
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", (req, res) => {
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", async (req, res) => {
     const { repositoryId, filePath, review, question } = req.body;
     if (!repositoryId || !filePath || !review) {
       return res.status(400).json({ message: "repositoryId, filePath, and review are required" });
     }
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
 
-    const saved = storage.addCodeReview({
+    const saved = await storage.addCodeReview({
       taskId: req.params.taskId,
       projectId: req.params.projectId,
       repositoryId,
@@ -467,11 +467,11 @@ export async function registerRoutes(
     if (!reviewResults) {
       return res.status(400).json({ message: "reviewResults is required" });
     }
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
 
     const bizId = req.params.bizId;
-    const reviewAgent = storage.getReviewAgent(bizId);
+    const reviewAgent = await storage.getReviewAgent(bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
@@ -521,7 +521,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
         .join("\n\n")
         .trim();
 
-      const updated = storage.addGeneratedPrompt(req.params.projectId, req.params.taskId, {
+      const updated = await storage.addGeneratedPrompt(req.params.projectId, req.params.taskId, {
         source: source === "discussion" ? "discussion" : "code_review",
         prompt,
         filePath: filePath || "",
@@ -534,10 +534,10 @@ Type: ${task.type} | Priority: ${task.priority}`;
     }
   });
 
-  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/discussion", (req, res) => {
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+  app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/discussion", async (req, res) => {
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
-    res.json(storage.getDiscussion(req.params.projectId, req.params.taskId));
+    res.json(await storage.getDiscussion(req.params.projectId, req.params.taskId));
   });
 
   app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/discuss", async (req, res) => {
@@ -546,11 +546,11 @@ Type: ${task.type} | Priority: ${task.priority}`;
       return res.status(400).json({ message: "message is required" });
     }
 
-    const task = storage.getTask(req.params.projectId, req.params.taskId);
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
     if (!task) return res.status(404).json({ message: "Task not found" });
 
     const bizId = req.params.bizId;
-    const reviewAgent = storage.getReviewAgent(bizId);
+    const reviewAgent = await storage.getReviewAgent(bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
@@ -614,7 +614,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
       console.log(`[DISCUSS] User message detected files:`, detectedFiles);
     }
 
-    const existingMessages = storage.getDiscussion(req.params.projectId, req.params.taskId);
+    const existingMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
     console.log(`[DISCUSS] Existing discussion messages: ${existingMessages.length}`);
 
     if (isReverification) {
@@ -653,7 +653,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
     const repoId = task.repositoryId;
     let repo: any = null;
     if (repoId) {
-      repo = storage.getRepositoryWithToken(repoId);
+      repo = await storage.getRepositoryWithToken(repoId);
       console.log(`[DISCUSS] Direct repo lookup for repoId=${repoId}: found=${!!repo}`);
     } else {
       console.log(`[DISCUSS] No task.repositoryId set`);
@@ -705,13 +705,13 @@ Type: ${task.type} | Priority: ${task.priority}`;
     }
 
     if (!repo && bizId) {
-      const bizRepos = storage.getRepositoriesWithTokens(bizId);
+      const bizRepos = await storage.getRepositoriesWithTokens(bizId);
       console.log(`[DISCUSS] Repo fallback: bizRepos count=${bizRepos.length}`);
       if (bizRepos.length === 1) {
         repo = bizRepos[0];
         console.log(`[DISCUSS] Using single biz repo: ${repo.owner}/${repo.repo}`);
       } else if (bizRepos.length > 1) {
-        const project = storage.getProject(bizId, req.params.projectId);
+        const project = await storage.getProject(bizId, req.params.projectId);
         console.log(`[DISCUSS] Multiple biz repos, project.defaultRepositoryId=${project?.defaultRepositoryId}`);
         if (project?.defaultRepositoryId) {
           repo = bizRepos.find(r => r.id === project.defaultRepositoryId) || null;
@@ -765,7 +765,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
     console.log(`[DISCUSS] === RESULT === loadedFiles: ${loadedFiles.length}, paths: [${loadedFilePaths.join(', ')}]`);
 
     if (!isAutoAnalysis) {
-      const userMsg = storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+      const userMsg = await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
         sender: "user",
         content: message,
         timestamp: new Date().toISOString(),
@@ -792,7 +792,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
     }
 
     let codeReviewContext = "";
-    const reviews = storage.getCodeReviews(task.id);
+    const reviews = await storage.getCodeReviews(task.id);
     if (reviews.length > 0) {
       const latest = reviews[0];
       let reviewText = latest.review;
@@ -867,7 +867,7 @@ Example of the tone to aim for:
         .map((block) => block.text)
         .join("");
 
-      storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+      await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
         sender: "claude",
         content: responseText,
         timestamp: new Date().toISOString(),
@@ -884,14 +884,14 @@ Example of the tone to aim for:
         } else if (upper.includes("STATUS: PARTIAL") || upper.includes("STATUS:PARTIAL")) {
           analysisResult = "partial";
         }
-        storage.updateTask(req.params.projectId, req.params.taskId, {
+        await storage.updateTask(req.params.projectId, req.params.taskId, {
           autoAnalysisComplete: true,
           autoAnalysisResult: analysisResult,
           autoAnalysisTimestamp: new Date().toISOString(),
         } as any, bizId);
       }
 
-      const allMessages = storage.getDiscussion(req.params.projectId, req.params.taskId);
+      const allMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
       res.json({ messages: allMessages, filesLoaded: loadedFilePaths });
     } catch (err: any) {
       console.error("[discuss] Error:", err);
@@ -906,7 +906,7 @@ Example of the tone to aim for:
   });
 
   app.get("/api/businesses/:bizId/repositories/:repoId/files", async (req, res) => {
-    const repo = storage.getRepositoryWithToken(req.params.repoId);
+    const repo = await storage.getRepositoryWithToken(req.params.repoId);
     if (!repo) return res.status(404).json({ message: "Repository not found" });
     if (!repo.token || !repo.owner || !repo.repo) {
       return res.status(400).json({ message: "Repository does not have GitHub configuration" });
@@ -941,7 +941,7 @@ Example of the tone to aim for:
   });
 
   app.get("/api/businesses/:bizId/repositories/:repoId/files/content", async (req, res) => {
-    const repo = storage.getRepositoryWithToken(req.params.repoId);
+    const repo = await storage.getRepositoryWithToken(req.params.repoId);
     if (!repo) return res.status(404).json({ message: "Repository not found" });
     if (!repo.token || !repo.owner || !repo.repo) {
       return res.status(400).json({ message: "Repository does not have GitHub configuration" });
@@ -982,19 +982,19 @@ Example of the tone to aim for:
     }
   });
 
-  app.get("/api/businesses/:bizId/changelog", (req, res) => {
-    res.json(storage.getChangelog(req.params.bizId));
+  app.get("/api/businesses/:bizId/changelog", async (req, res) => {
+    res.json(await storage.getChangelog(req.params.bizId));
   });
 
-  app.get("/api/businesses/:bizId/inbox", (req, res) => {
-    res.json(storage.getInboxItems(req.params.bizId));
+  app.get("/api/businesses/:bizId/inbox", async (req, res) => {
+    res.json(await storage.getInboxItems(req.params.bizId));
   });
 
-  app.post("/api/businesses/:bizId/inbox", (req, res) => {
+  app.post("/api/businesses/:bizId/inbox", async (req, res) => {
     try {
       const { title, type, priority, description, source, notes } = req.body;
       if (!title) return res.status(400).json({ message: "title is required" });
-      const item = storage.addInboxItem(req.params.bizId, {
+      const item = await storage.addInboxItem(req.params.bizId, {
         title,
         type: type || "Idea",
         priority: priority || "Medium",
@@ -1008,31 +1008,31 @@ Example of the tone to aim for:
     }
   });
 
-  app.put("/api/businesses/:bizId/inbox/:itemId", (req, res) => {
-    const updated = storage.updateInboxItem(req.params.bizId, req.params.itemId, req.body);
+  app.put("/api/businesses/:bizId/inbox/:itemId", async (req, res) => {
+    const updated = await storage.updateInboxItem(req.params.bizId, req.params.itemId, req.body);
     if (!updated) return res.status(404).json({ message: "Inbox item not found" });
     res.json(updated);
   });
 
-  app.delete("/api/businesses/:bizId/inbox/:itemId", (req, res) => {
-    const deleted = storage.deleteInboxItem(req.params.bizId, req.params.itemId);
+  app.delete("/api/businesses/:bizId/inbox/:itemId", async (req, res) => {
+    const deleted = await storage.deleteInboxItem(req.params.bizId, req.params.itemId);
     if (!deleted) return res.status(404).json({ message: "Inbox item not found" });
     res.json({ success: true });
   });
 
-  app.post("/api/businesses/:bizId/inbox/:itemId/assign", (req, res) => {
+  app.post("/api/businesses/:bizId/inbox/:itemId/assign", async (req, res) => {
     const { projectId } = req.body;
     if (!projectId) return res.status(400).json({ message: "projectId is required" });
-    const result = storage.assignInboxItem(req.params.bizId, req.params.itemId, projectId);
+    const result = await storage.assignInboxItem(req.params.bizId, req.params.itemId, projectId);
     if (!result) return res.status(404).json({ message: "Inbox item or project not found" });
     res.json(result);
   });
 
   app.post("/api/businesses/:bizId/inbox/process-transcript", async (req, res) => {
-    const biz = storage.getBusiness(req.params.bizId);
+    const biz = await storage.getBusiness(req.params.bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
-    const reviewAgent = storage.getReviewAgent(req.params.bizId);
+    const reviewAgent = await storage.getReviewAgent(req.params.bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set. Add an agent in Settings or set ANTHROPIC_API_KEY in Replit Secrets." });
@@ -1041,7 +1041,7 @@ Example of the tone to aim for:
     const { transcript, meetingTitle, meetingDate } = req.body;
     if (!transcript) return res.status(400).json({ message: "transcript is required" });
 
-    const existingProjects = storage.getProjects(req.params.bizId);
+    const existingProjects = await storage.getProjects(req.params.bizId);
     const projectNames = existingProjects.map((p) => p.name).join(", ");
 
     try {
@@ -1100,14 +1100,14 @@ Return only valid JSON with "items" and "suggestedProjects" fields, nothing else
       return res.status(400).json({ message: "repositoryId and filePath are required" });
     }
 
-    const repo = storage.getRepositoryWithToken(repositoryId);
+    const repo = await storage.getRepositoryWithToken(repositoryId);
     if (!repo) return res.status(404).json({ message: "Repository not found" });
     if (!repo.token || !repo.owner || !repo.repo) {
       return res.status(400).json({ message: "Repository does not have GitHub configuration" });
     }
 
     const bizId = businessId || repo.businessId;
-    const reviewAgent = storage.getReviewAgent(bizId);
+    const reviewAgent = await storage.getReviewAgent(bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
@@ -1142,9 +1142,9 @@ Return only valid JSON with "items" and "suggestedProjects" fields, nothing else
 
       let taskContext = "";
       if (taskId) {
-        const projects = storage.getProjects(bizId);
+        const projects = await storage.getProjects(bizId);
         for (const p of projects) {
-          const task = storage.getTask(p.id, taskId);
+          const task = await storage.getTask(p.id, taskId);
           if (task) {
             taskContext = `\n\nRelated Task: ${task.id} - ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}`;
             break;
@@ -1172,14 +1172,14 @@ Return only valid JSON with "items" and "suggestedProjects" fields, nothing else
         .join("\n\n");
 
       if (taskId) {
-        const projects = storage.getProjects(bizId);
+        const projects = await storage.getProjects(bizId);
         let foundProjectId = "";
         for (const p of projects) {
-          const t = storage.getTask(p.id, taskId);
+          const t = await storage.getTask(p.id, taskId);
           if (t) { foundProjectId = p.id; break; }
         }
         if (foundProjectId) {
-          storage.addCodeReview({
+          await storage.addCodeReview({
             taskId,
             projectId: foundProjectId,
             repositoryId,
@@ -1204,10 +1204,10 @@ Return only valid JSON with "items" and "suggestedProjects" fields, nothing else
       return res.status(400).json({ message: "businessId and reviewText are required" });
     }
 
-    const biz = storage.getBusiness(businessId);
+    const biz = await storage.getBusiness(businessId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
-    const reviewAgent = storage.getReviewAgent(businessId);
+    const reviewAgent = await storage.getReviewAgent(businessId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
@@ -1265,14 +1265,14 @@ Return only valid JSON with "items" and "suggestedProjects" fields, nothing else
       return res.status(400).json({ message: "repositoryId and taskTitle are required" });
     }
 
-    const repo = storage.getRepositoryWithToken(repositoryId);
+    const repo = await storage.getRepositoryWithToken(repositoryId);
     if (!repo) return res.status(404).json({ message: "Repository not found" });
     if (!repo.token || !repo.owner || !repo.repo) {
       return res.status(400).json({ message: "Repository does not have GitHub configuration" });
     }
 
     const bizId = businessId || repo.businessId;
-    const reviewAgent = storage.getReviewAgent(bizId);
+    const reviewAgent = await storage.getReviewAgent(bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
@@ -1349,15 +1349,18 @@ ${fileList.join("\n")}`,
     }
   });
 
-  app.get("/api/businesses/:bizId/manager", (req, res) => {
+  app.get("/api/businesses/:bizId/manager", async (req, res) => {
     const bizId = req.params.bizId;
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
-    const messages = storage.getManagerDiscussion(bizId);
-    const allProjectData = storage.getAllTasksForBusiness(bizId);
-    const inboxItems = storage.getInboxItems(bizId);
-    const changelog = storage.getChangelog(bizId);
+    const allMessages = await storage.getManagerDiscussion(bizId);
+    const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
+    const totalMessages = allMessages.length;
+    const messages = limit && limit < totalMessages ? allMessages.slice(-limit) : allMessages;
+    const allProjectData = await storage.getAllTasksForBusiness(bizId);
+    const inboxItems = await storage.getInboxItems(bizId);
+    const changelog = await storage.getChangelog(bizId);
 
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1453,6 +1456,7 @@ ${fileList.join("\n")}`,
 
     res.json({
       messages,
+      totalMessages,
       alerts,
       stats: { totalOpen, totalInProgress, totalDone, totalBlocked, completedThisWeek, pendingInbox, healthScore },
       projectStats,
@@ -1473,19 +1477,19 @@ ${fileList.join("\n")}`,
       type: String(a.type || "text/plain").slice(0, 100),
     }));
 
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
-    const reviewAgent = storage.getReviewAgent(bizId);
+    const reviewAgent = await storage.getReviewAgent(bizId);
     const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
     }
 
-    const allProjectData = storage.getAllTasksForBusiness(bizId);
-    const inboxItems = storage.getInboxItems(bizId);
-    const changelog = storage.getChangelog(bizId);
-    const repos = storage.getRepositories(bizId);
+    const allProjectData = await storage.getAllTasksForBusiness(bizId);
+    const inboxItems = await storage.getInboxItems(bizId);
+    const changelog = await storage.getChangelog(bizId);
+    const repos = await storage.getRepositories(bizId);
 
     const now = new Date();
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1551,7 +1555,7 @@ ${fileList.join("\n")}`,
       contextParts.push(`\nREPOSITORIES:\n${repos.map(r => `- ${r.name} (${r.type}): ${r.repoUrl || "no URL"}`).join("\n")}`);
     }
 
-    const reposWithTokens = storage.getRepositoriesWithTokens(bizId);
+    const reposWithTokens = await storage.getRepositoriesWithTokens(bizId);
     const configuredRepos = reposWithTokens.filter(r => r.owner && r.repo && r.token);
 
     const scanRepos = req.body.scanRepos === true;
@@ -1608,7 +1612,7 @@ ${fileList.join("\n")}`,
       }
     }
 
-    const existingMsgs = storage.getManagerDiscussion(bizId);
+    const existingMsgs = await storage.getManagerDiscussion(bizId);
     const lastManagerMsg = [...existingMsgs].reverse().find(m => m.sender === "manager");
     if (lastManagerMsg) {
       const detectedPaths = detectFilePathsInText(lastManagerMsg.content);
@@ -1671,7 +1675,7 @@ RULES:
 - For MOVE_TASK, use ONLY actual task IDs and real project IDs from the AVAILABLE lists. Include fromProjectId (the task's current project) and toProjectId (the destination project). Always provide the reason for moving.`;
 
     const projectList = allProjectData.map(p => `  ${p.project.id}: ${p.project.name}${p.project.defaultRepositoryId ? ` (default repo: ${p.project.defaultRepositoryId})` : ""}`).join("\n");
-    const repoList = storage.getRepositories(bizId).map(r => `  ${r.id}: ${r.name} (${r.type})`).join("\n");
+    const repoList = (await storage.getRepositories(bizId)).map(r => `  ${r.id}: ${r.name} (${r.type})`).join("\n");
     const projectRef = `\n\nAVAILABLE PROJECTS:\n${projectList}\n\nAVAILABLE REPOSITORIES:\n${repoList || "  (none)"}`;
 
     if (chatMode === "briefing") {
@@ -1692,7 +1696,7 @@ RULES:
     }
 
     if (chatMode === "chat") {
-      storage.addManagerMessage(bizId, {
+      await storage.addManagerMessage(bizId, {
         sender: "user",
         content: message,
         timestamp: new Date().toISOString(),
@@ -1703,7 +1707,7 @@ RULES:
       });
     }
 
-    const existingMessages = storage.getManagerDiscussion(bizId);
+    const existingMessages = await storage.getManagerDiscussion(bizId);
     const previousConversation = existingMessages
       .slice(-20)
       .map(m => `${m.sender === "user" ? "User" : "Manager"}: ${m.content}`)
@@ -1756,7 +1760,7 @@ RULES:
 
       const filesLoaded = fileContents.map(f => ({ path: f.path, repo: f.repoName }));
 
-      const managerMsg = storage.addManagerMessage(bizId, {
+      const managerMsg = await storage.addManagerMessage(bizId, {
         sender: "manager",
         content: cleanContent,
         timestamp: new Date().toISOString(),
@@ -1766,7 +1770,7 @@ RULES:
         attachments: [],
       });
 
-      const allMessages = storage.getManagerDiscussion(bizId);
+      const allMessages = await storage.getManagerDiscussion(bizId);
       res.json({ messages: allMessages, response: cleanContent, filesLoaded });
     } catch (err: any) {
       console.error("[manager/chat] Error:", err);
@@ -1782,10 +1786,10 @@ RULES:
 
   app.post("/api/businesses/:bizId/manager/scan-repos", async (req, res) => {
     const bizId = req.params.bizId;
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
-    const reposWithTokens = storage.getRepositoriesWithTokens(bizId);
+    const reposWithTokens = await storage.getRepositoriesWithTokens(bizId);
     const configuredRepos = reposWithTokens.filter(r => r.owner && r.repo && r.token);
 
     if (configuredRepos.length === 0) {
@@ -1810,9 +1814,9 @@ RULES:
     res.json({ repositories });
   });
 
-  app.post("/api/businesses/:bizId/manager/execute-action", (req, res) => {
+  app.post("/api/businesses/:bizId/manager/execute-action", async (req, res) => {
     const bizId = req.params.bizId;
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
     const { actionType, data, messageId, actionIndex } = req.body;
@@ -1822,7 +1826,7 @@ RULES:
     }
 
     if (messageId !== undefined && actionIndex !== undefined) {
-      const msgs = storage.getManagerDiscussion(bizId);
+      const msgs = await storage.getManagerDiscussion(bizId);
       const msg = msgs.find(m => m.id === messageId);
       if (msg && msg.actions && msg.actions[actionIndex]) {
         if (msg.actions[actionIndex].status !== "pending") {
@@ -1837,7 +1841,7 @@ RULES:
       switch (actionType) {
         case "CREATE_INBOX_ITEM": {
           if (!data.title) return res.status(400).json({ message: "title is required for inbox item" });
-          const item = storage.addInboxItem(bizId, {
+          const item = await storage.addInboxItem(bizId, {
             title: data.title || "Untitled",
             type: data.type || "Bug",
             priority: data.priority || "Medium",
@@ -1852,9 +1856,9 @@ RULES:
           if (!data.projectId) return res.status(400).json({ message: "projectId is required for creating a task" });
           if (!data.title) return res.status(400).json({ message: "title is required for creating a task" });
           const projectId = data.projectId;
-          const project = storage.getProject(bizId, projectId);
+          const project = await storage.getProject(bizId, projectId);
           if (!project) return res.status(400).json({ message: `Project ${projectId} not found` });
-          const task = storage.createTask(projectId, {
+          const task = await storage.createTask(projectId, {
             type: data.type || "Task",
             status: "Open",
             priority: data.priority || "Medium",
@@ -1879,15 +1883,15 @@ RULES:
           if (!validStatuses.includes(newStatus)) {
             return res.status(400).json({ message: `Invalid status: ${newStatus}` });
           }
-          const allProjectData = storage.getAllTasksForBusiness(bizId);
+          const allProjectData = await storage.getAllTasksForBusiness(bizId);
           let updatedTask: any = null;
           for (const { project, tasks } of allProjectData) {
             const task = tasks.find(t => t.id === taskId);
             if (task) {
               const oldStatus = task.status;
-              updatedTask = storage.updateTask(project.id, taskId, { status: newStatus } as any, bizId);
+              updatedTask = await storage.updateTask(project.id, taskId, { status: newStatus } as any, bizId);
               if (updatedTask && oldStatus !== newStatus) {
-                storage.addChangelogEntry(bizId, {
+                await storage.addChangelogEntry(bizId, {
                   taskId: updatedTask.id,
                   taskTitle: updatedTask.title,
                   fromStatus: oldStatus,
@@ -1904,7 +1908,7 @@ RULES:
         }
         case "CREATE_PROJECT": {
           if (!data.name) return res.status(400).json({ message: "name is required for creating a project" });
-          const project = storage.createProject(bizId, {
+          const project = await storage.createProject(bizId, {
             name: data.name || "New Project",
             description: data.description || "",
             color: data.color || "#58a6ff",
@@ -1917,12 +1921,12 @@ RULES:
         case "BULK_UPDATE_REPOSITORY": {
           if (!data.projectId) return res.status(400).json({ message: "projectId is required for bulk repository update" });
           if (!data.repositoryId) return res.status(400).json({ message: "repositoryId is required for bulk repository update" });
-          const bulkProject = storage.getProject(bizId, data.projectId);
+          const bulkProject = await storage.getProject(bizId, data.projectId);
           if (!bulkProject) return res.status(400).json({ message: `Project ${data.projectId} not found` });
-          const bulkRepo = storage.getRepositories(bizId).find(r => r.id === data.repositoryId);
+          const bulkRepo = (await storage.getRepositories(bizId)).find(r => r.id === data.repositoryId);
           if (!bulkRepo) return res.status(400).json({ message: `Repository ${data.repositoryId} not found` });
           const onlyUnlinked = data.onlyUnlinked !== false;
-          const updatedCount = storage.bulkUpdateTasksRepository(data.projectId, data.repositoryId, onlyUnlinked);
+          const updatedCount = await storage.bulkUpdateTasksRepository(data.projectId, data.repositoryId, onlyUnlinked);
           result = { type: "bulkRepository", updated: updatedCount, projectName: bulkProject.name, repositoryName: bulkRepo.name };
           break;
         }
@@ -1930,12 +1934,12 @@ RULES:
           if (!data.taskId) return res.status(400).json({ message: "taskId is required for moving a task" });
           if (!data.fromProjectId) return res.status(400).json({ message: "fromProjectId is required for moving a task" });
           if (!data.toProjectId) return res.status(400).json({ message: "toProjectId is required for moving a task" });
-          const moveFromProject = storage.getProject(bizId, data.fromProjectId);
+          const moveFromProject = await storage.getProject(bizId, data.fromProjectId);
           if (!moveFromProject) return res.status(400).json({ message: `Source project ${data.fromProjectId} not found` });
-          const moveToProject = storage.getProject(bizId, data.toProjectId);
+          const moveToProject = await storage.getProject(bizId, data.toProjectId);
           if (!moveToProject) return res.status(400).json({ message: `Target project ${data.toProjectId} not found` });
           if (data.fromProjectId === data.toProjectId) return res.status(400).json({ message: "Source and target projects are the same" });
-          const movedTask = storage.moveTask(data.fromProjectId, data.toProjectId, data.taskId);
+          const movedTask = await storage.moveTask(data.fromProjectId, data.toProjectId, data.taskId);
           if (!movedTask) return res.status(404).json({ message: `Task ${data.taskId} not found in project ${data.fromProjectId}` });
           result = { type: "moveTask", task: movedTask, fromProject: moveFromProject.name, toProject: moveToProject.name };
           break;
@@ -1945,11 +1949,11 @@ RULES:
       }
 
       if (messageId !== undefined && actionIndex !== undefined) {
-        const msgs = storage.getManagerDiscussion(bizId);
+        const msgs = await storage.getManagerDiscussion(bizId);
         const msg = msgs.find(m => m.id === messageId);
         if (msg && msg.actions && msg.actions[actionIndex]) {
           msg.actions[actionIndex].status = "approved";
-          storage.updateManagerMessage(bizId, messageId, msg);
+          await storage.updateManagerMessage(bizId, messageId, msg);
         }
       }
 
@@ -1960,9 +1964,9 @@ RULES:
     }
   });
 
-  app.post("/api/businesses/:bizId/manager/update-action-status", (req, res) => {
+  app.post("/api/businesses/:bizId/manager/update-action-status", async (req, res) => {
     const bizId = req.params.bizId;
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
 
     const { messageId, actionIndex, status } = req.body;
@@ -1970,7 +1974,7 @@ RULES:
       return res.status(400).json({ message: "messageId, actionIndex, and status are required" });
     }
 
-    const msgs = storage.getManagerDiscussion(bizId);
+    const msgs = await storage.getManagerDiscussion(bizId);
     const msg = msgs.find(m => m.id === messageId);
     if (!msg) return res.status(404).json({ message: "Message not found" });
     if (!msg.actions || !msg.actions[actionIndex]) {
@@ -1978,15 +1982,15 @@ RULES:
     }
 
     msg.actions[actionIndex].status = status;
-    storage.updateManagerMessage(bizId, messageId, msg);
+    await storage.updateManagerMessage(bizId, messageId, msg);
     res.json({ success: true });
   });
 
-  app.delete("/api/businesses/:bizId/manager/history", (req, res) => {
+  app.delete("/api/businesses/:bizId/manager/history", async (req, res) => {
     const bizId = req.params.bizId;
-    const biz = storage.getBusiness(bizId);
+    const biz = await storage.getBusiness(bizId);
     if (!biz) return res.status(404).json({ message: "Business not found" });
-    storage.clearManagerDiscussion(bizId);
+    await storage.clearManagerDiscussion(bizId);
     res.json({ success: true });
   });
 

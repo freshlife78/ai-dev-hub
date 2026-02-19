@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { pgTable, text, varchar, boolean, jsonb } from "drizzle-orm/pg-core";
 
 export const agentTypeEnum = z.enum(["Claude", "ChatGPT", "Replit", "Other"]);
 
@@ -248,3 +249,110 @@ export interface StoreData {
   codeReviews: Record<string, CodeReview[]>;
   managerDiscussions: Record<string, ManagerMessage[]>;
 }
+
+export const businessesTable = pgTable("businesses", {
+  id: varchar("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  color: varchar("color", { length: 20 }).notNull().default("#58a6ff"),
+});
+
+export const repositoriesTable = pgTable("repositories", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  repoUrl: text("repo_url").notNull().default(""),
+  owner: varchar("owner").notNull().default(""),
+  repo: varchar("repo").notNull().default(""),
+  token: text("token").notNull().default(""),
+  type: varchar("type", { length: 20 }).notNull().default("other"),
+});
+
+export const projectsTable = pgTable("projects", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  color: varchar("color", { length: 20 }).notNull().default("#58a6ff"),
+  relatedRepositories: jsonb("related_repositories").$type<string[]>().notNull().default([]),
+  defaultRepositoryId: varchar("default_repository_id").notNull().default(""),
+});
+
+export const tasksTable = pgTable("tasks", {
+  id: varchar("id").notNull(),
+  projectId: varchar("project_id").notNull(),
+  repositoryId: varchar("repository_id").notNull().default(""),
+  type: varchar("type", { length: 20 }).notNull(),
+  status: varchar("status", { length: 30 }).notNull().default("Open"),
+  priority: varchar("priority", { length: 20 }).notNull().default("Medium"),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  reasoning: text("reasoning").notNull().default(""),
+  fixSteps: text("fix_steps").notNull().default(""),
+  replitPrompt: text("replit_prompt").notNull().default(""),
+  filePath: text("file_path").notNull().default(""),
+  discussion: jsonb("discussion").$type<DiscussionMessage[]>().notNull().default([]),
+  autoAnalysisComplete: boolean("auto_analysis_complete").notNull().default(false),
+  autoAnalysisResult: varchar("auto_analysis_result", { length: 20 }),
+  autoAnalysisTimestamp: text("auto_analysis_timestamp"),
+  generatedPrompts: jsonb("generated_prompts").$type<GeneratedPrompt[]>().notNull().default([]),
+});
+
+export const agentsTable = pgTable("agents", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  name: text("name").notNull(),
+  type: varchar("type", { length: 20 }).notNull(),
+  apiKey: text("api_key").notNull().default(""),
+  role: text("role").notNull().default(""),
+  isReviewAgent: boolean("is_review_agent").notNull().default(false),
+});
+
+export const inboxItemsTable = pgTable("inbox_items", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  title: text("title").notNull(),
+  type: varchar("type", { length: 20 }).notNull(),
+  source: varchar("source", { length: 20 }).notNull(),
+  description: text("description").notNull().default(""),
+  priority: varchar("priority", { length: 20 }).notNull().default("Medium"),
+  status: varchar("status", { length: 20 }).notNull().default("New"),
+  dateReceived: text("date_received").notNull(),
+  linkedProjectId: varchar("linked_project_id"),
+  linkedTaskId: varchar("linked_task_id"),
+  notes: text("notes").notNull().default(""),
+});
+
+export const changelogEntriesTable = pgTable("changelog_entries", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  taskId: varchar("task_id").notNull(),
+  taskTitle: text("task_title").notNull(),
+  fromStatus: varchar("from_status", { length: 30 }).notNull(),
+  toStatus: varchar("to_status", { length: 30 }).notNull(),
+  timestamp: text("timestamp").notNull(),
+});
+
+export const codeReviewsTable = pgTable("code_reviews", {
+  id: varchar("id").primaryKey(),
+  taskId: varchar("task_id").notNull(),
+  projectId: varchar("project_id").notNull(),
+  repositoryId: varchar("repository_id").notNull(),
+  filePath: text("file_path").notNull().default(""),
+  review: text("review").notNull().default(""),
+  question: text("question").notNull().default(""),
+  timestamp: text("timestamp").notNull(),
+});
+
+export const managerMessagesTable = pgTable("manager_messages", {
+  id: varchar("id").primaryKey(),
+  businessId: varchar("business_id").notNull(),
+  sender: varchar("sender", { length: 20 }).notNull(),
+  content: text("content").notNull(),
+  timestamp: text("timestamp").notNull(),
+  mode: varchar("mode", { length: 20 }).notNull().default("chat"),
+  actions: jsonb("actions").$type<ManagerAction[]>().notNull().default([]),
+  filesLoaded: jsonb("files_loaded").$type<{ path: string; repo: string }[]>().notNull().default([]),
+  attachments: jsonb("attachments").$type<{ name: string; content: string; type: string }[]>().notNull().default([]),
+});
