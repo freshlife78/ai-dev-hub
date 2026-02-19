@@ -252,9 +252,9 @@ function ActionCard({
             {isApproved && <Badge variant="secondary" className="text-[9px] text-green-500">Approved</Badge>}
             {isCancelled && <Badge variant="secondary" className="text-[9px] text-muted-foreground">Cancelled</Badge>}
           </div>
-          <div className="text-sm font-medium mt-0.5" data-testid={`action-title-${actionIndex}`}>{summary.title}</div>
+          <div className="text-sm font-medium mt-0.5 break-words" data-testid={`action-title-${actionIndex}`}>{summary.title}</div>
           {summary.details.map((d, i) => (
-            <div key={i} className="text-[11px] text-muted-foreground mt-0.5">{d}</div>
+            <div key={i} className="text-[11px] text-muted-foreground mt-0.5 break-words">{d}</div>
           ))}
         </div>
       </div>
@@ -631,9 +631,9 @@ export default function ManagerView() {
                     return (
                       <div key={alert.id} className={`flex items-start gap-2 p-2 rounded-md border ${cfg.bg}`} data-testid={`alert-${alert.id}`}>
                         <Icon className={`w-3.5 h-3.5 shrink-0 mt-0.5 ${cfg.color}`} />
-                        <div className="min-w-0">
-                          <div className={`text-xs font-medium ${cfg.color}`}>{alert.title}</div>
-                          <div className="text-[10px] text-muted-foreground truncate">{alert.description}</div>
+                        <div className="min-w-0 flex-1">
+                          <div className={`text-xs font-medium break-words ${cfg.color}`}>{alert.title}</div>
+                          <div className="text-[10px] text-muted-foreground break-words">{alert.description}</div>
                         </div>
                       </div>
                     );
@@ -788,10 +788,10 @@ export default function ManagerView() {
                       </div>
                     )}
                     {msg.sender === "user" ? (
-                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
                     ) : (
                       <div
-                        className="text-sm prose-sm prose-invert max-w-none [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_strong]:text-foreground [&_li]:text-foreground/90"
+                        className="text-sm prose-sm prose-invert max-w-none break-words overflow-wrap-anywhere [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_strong]:text-foreground [&_li]:text-foreground/90"
                         dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(msg.content)) }}
                       />
                     )}
