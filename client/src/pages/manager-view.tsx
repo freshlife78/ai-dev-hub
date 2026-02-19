@@ -713,7 +713,7 @@ export default function ManagerView() {
         </ScrollArea>
       </div>
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="flex items-center justify-between gap-2 p-3 border-b border-border flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             <Button size="sm" variant="outline" onClick={handleBriefing} disabled={chatMutation.isPending} data-testid="button-daily-briefing">
@@ -741,8 +741,8 @@ export default function ManagerView() {
           </Button>
         </div>
 
-        <ScrollArea className="flex-1">
-          <div className="p-4 space-y-4" data-testid="manager-chat">
+        <ScrollArea className="flex-1 w-full">
+          <div className="p-4 space-y-4 overflow-hidden" data-testid="manager-chat">
             {messages.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
                 <BrainCircuit className="w-12 h-12 text-muted-foreground/30" />
