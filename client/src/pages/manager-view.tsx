@@ -103,16 +103,27 @@ function escapeHtml(text: string) {
 
 function renderMarkdown(text: string) {
   let html = escapeHtml(text)
-    .replace(/^### (.+)$/gm, '<h3 class="text-sm font-semibold mt-3 mb-1">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-base font-semibold mt-4 mb-1.5">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 class="text-lg font-bold mt-4 mb-2">$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code class="text-xs bg-muted px-1 py-0.5 rounded font-mono">$1</code>')
-    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-sm">$1</li>')
-    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 list-decimal text-sm">$1</li>')
+    .replace(/^### (.+)$/gm, '<h3 class="text-sm font-semibold mt-3 mb-1 break-words">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="text-base font-semibold mt-4 mb-1.5 break-words">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="text-lg font-bold mt-4 mb-2 break-words">$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="break-words">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em class="break-words">$1</em>')
+    .replace(/`([^`]+)`/g, '<code class="text-xs bg-muted px-1 py-0.5 rounded font-mono break-all">$1</code>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-sm break-words">$1</li>')
+    .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 list-decimal text-sm break-words">$1</li>')
     .replace(/\n\n/g, '<br/><br/>')
     .replace(/\n/g, '<br/>');
+  
+  // Wrap consecutive list items in ul/ol tags
+  html = html.replace(/(<li class="ml-4 list-disc[^>]*>.*?<\/li>(?:<br\/>)?)+/g, (match) => {
+    const items = match.replace(/<br\/>/g, '');
+    return `<ul class="my-2 space-y-1">${items}</ul>`;
+  });
+  html = html.replace(/(<li class="ml-4 list-decimal[^>]*>.*?<\/li>(?:<br\/>)?)+/g, (match) => {
+    const items = match.replace(/<br\/>/g, '');
+    return `<ol class="my-2 space-y-1">${items}</ol>`;
+  });
+  
   return html;
 }
 
@@ -763,10 +774,10 @@ export default function ManagerView() {
             {messages.map(msg => (
               <div
                 key={msg.id}
-                className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"} w-full`}
                 data-testid={`message-${msg.id}`}
               >
-                <div className={`max-w-[85%] ${msg.sender === "user" ? "" : ""}`}>
+                <div className={`max-w-[85%] min-w-0 ${msg.sender === "user" ? "" : ""}`}>
                   <div className={`rounded-lg px-3.5 py-2.5 ${
                     msg.sender === "user"
                       ? "bg-primary text-primary-foreground"
@@ -788,10 +799,10 @@ export default function ManagerView() {
                       </div>
                     )}
                     {msg.sender === "user" ? (
-                      <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                      <p className="text-sm whitespace-pre-wrap break-words overflow-wrap-anywhere">{msg.content}</p>
                     ) : (
                       <div
-                        className="text-sm prose-sm prose-invert max-w-none break-words overflow-wrap-anywhere [&_h1]:text-foreground [&_h2]:text-foreground [&_h3]:text-foreground [&_strong]:text-foreground [&_li]:text-foreground/90"
+                        className="text-sm max-w-full break-words overflow-wrap-anywhere [&_ul]:list-inside [&_ol]:list-inside [&_li]:break-words [&_code]:break-all [&_*]:max-w-full"
                         dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(renderMarkdown(msg.content)) }}
                       />
                     )}
