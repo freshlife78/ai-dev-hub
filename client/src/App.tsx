@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, lazy, Suspense } from "react";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -12,39 +12,55 @@ import { ProjectDialog } from "@/components/project-dialog";
 import { BusinessDialog } from "@/components/business-dialog";
 import { usePwaInstall } from "@/hooks/use-pwa-install";
 import { Button } from "@/components/ui/button";
-import { Download, X } from "lucide-react";
-import TasksView from "@/pages/tasks-view";
-import FilesView from "@/pages/files-view";
-import PromptsView from "@/pages/prompts-view";
-import ChangelogView from "@/pages/changelog-view";
-import InboxView from "@/pages/inbox-view";
-import SettingsView from "@/pages/settings-view";
-import ManagerView from "@/pages/manager-view";
+import { Download, X, Loader2 } from "lucide-react";
 import type { Project } from "@shared/schema";
+
+// Lazy load view components for better performance
+const TasksView = lazy(() => import("@/pages/tasks-view"));
+const FilesView = lazy(() => import("@/pages/files-view"));
+const PromptsView = lazy(() => import("@/pages/prompts-view"));
+const ChangelogView = lazy(() => import("@/pages/changelog-view"));
+const InboxView = lazy(() => import("@/pages/inbox-view"));
+const SettingsView = lazy(() => import("@/pages/settings-view"));
+const ManagerView = lazy(() => import("@/pages/manager-view"));
+
+function LoadingFallback() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 function MainContent() {
   const { currentView } = useAppState();
 
-  switch (currentView) {
-    case "all-tasks":
-      return <TasksView />;
-    case "tasks":
-      return <TasksView />;
-    case "files":
-      return <FilesView />;
-    case "inbox":
-      return <InboxView />;
-    case "prompts":
-      return <PromptsView />;
-    case "changelog":
-      return <ChangelogView />;
-    case "settings":
-      return <SettingsView />;
-    case "manager":
-      return <ManagerView />;
-    default:
-      return <TasksView />;
-  }
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      {(() => {
+        switch (currentView) {
+          case "all-tasks":
+            return <TasksView />;
+          case "tasks":
+            return <TasksView />;
+          case "files":
+            return <FilesView />;
+          case "inbox":
+            return <InboxView />;
+          case "prompts":
+            return <PromptsView />;
+          case "changelog":
+            return <ChangelogView />;
+          case "settings":
+            return <SettingsView />;
+          case "manager":
+            return <ManagerView />;
+          default:
+            return <TasksView />;
+        }
+      })()}
+    </Suspense>
+  );
 }
 
 function AppLayout() {

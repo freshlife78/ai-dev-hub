@@ -74,6 +74,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const { data: discussion = [], isLoading: discussionLoading } = useQuery<DiscussionMessage[]>({
     queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"],
     enabled: !!selectedBusinessId && activeTab === "discussion",
+    staleTime: 0, // Always refetch when tab opens to prevent stale data
   });
 
   const discussMutation = useMutation({

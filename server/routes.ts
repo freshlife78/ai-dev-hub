@@ -173,6 +173,15 @@ export async function registerRoutes(
 ): Promise<Server> {
   seedData();
 
+  // Health check endpoint
+  app.get("/api/health", (_req, res) => {
+    res.json({ 
+      status: "ok", 
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  });
+
   app.get("/api/businesses", (_req, res) => {
     res.json(storage.getBusinesses());
   });
@@ -939,9 +948,15 @@ Example of the tone to aim for:
     }
     const filePath = req.query.path as string;
     if (!filePath) return res.status(400).json({ message: "path query parameter is required" });
+    
+    // Validate file path to prevent path traversal attacks
+    if (filePath.includes('..') || filePath.startsWith('/') || filePath.includes('\\')) {
+      return res.status(400).json({ message: "Invalid file path" });
+    }
+    
     try {
       const response = await fetch(
-        `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${filePath}`,
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodeURIComponent(filePath)}`,
         {
           headers: {
             Authorization: `token ${repo.token}`,
@@ -1543,17 +1558,19 @@ ${fileList.join("\n")}`,
     const requestedFiles: string[] = Array.isArray(req.body.fetchFiles) ? req.body.fetchFiles : [];
 
     if (scanRepos || configuredRepos.length > 0) {
-      const treeResults = await Promise.all(configuredRepos.map(r => fetchRepoTopLevelTree(r)));
-      const commitResults = await Promise.all(configuredRepos.map(r => fetchRepoRecentCommits(r)));
+      const treeResults = await Promise.allSettled(configuredRepos.map(r => fetchRepoTopLevelTree(r)));
+      const commitResults = await Promise.allSettled(configuredRepos.map(r => fetchRepoRecentCommits(r)));
 
-      for (const tree of treeResults) {
-        if (tree && tree.tree.length > 0) {
+      for (const result of treeResults) {
+        if (result.status === 'fulfilled' && result.value && result.value.tree.length > 0) {
+          const tree = result.value;
           contextParts.push(`\nREPOSITORY FILE STRUCTURE - ${tree.name} (${tree.repoId}):\n${tree.tree.join("\n")}`);
         }
       }
 
-      for (const commits of commitResults) {
-        if (commits && commits.commits.length > 0) {
+      for (const result of commitResults) {
+        if (result.status === 'fulfilled' && result.value && result.value.commits.length > 0) {
+          const commits = result.value;
           contextParts.push(`\nRECENT COMMITS - ${commits.name}:\n${commits.commits.join("\n")}`);
         }
       }
@@ -1776,8 +1793,8 @@ RULES:
     }
 
     const [treeResults, commitResults] = await Promise.all([
-      Promise.all(configuredRepos.map(r => fetchRepoTopLevelTree(r))),
-      Promise.all(configuredRepos.map(r => fetchRepoRecentCommits(r))),
+      Promise.allSettled(configuredRepos.map(r => fetchRepoTopLevelTree(r))),
+      Promise.allSettled(configuredRepos.map(r => fetchRepoRecentCommits(r))),
     ]);
 
     const repositories = configuredRepos.map((repo, i) => ({
@@ -1786,8 +1803,8 @@ RULES:
       owner: repo.owner,
       repo: repo.repo,
       type: repo.type,
-      tree: treeResults[i]?.tree || [],
-      commits: commitResults[i]?.commits || [],
+      tree: (treeResults[i].status === 'fulfilled' && treeResults[i].value) ? treeResults[i].value.tree : [],
+      commits: (commitResults[i].status === 'fulfilled' && commitResults[i].value) ? commitResults[i].value.commits : [],
     }));
 
     res.json({ repositories });
