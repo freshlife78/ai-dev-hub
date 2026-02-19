@@ -10,6 +10,14 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import {
   BrainCircuit,
   Send,
   Loader2,
@@ -39,6 +47,7 @@ import {
   FileText as FileIcon,
   Image as ImageIcon,
   FolderOutput,
+  FolderOpen,
 } from "lucide-react";
 import type { ManagerMessage, ManagerAction, ManagerAlert, ChangelogEntry } from "@shared/schema";
 
@@ -362,6 +371,7 @@ export default function ManagerView() {
   const recognitionRef = useRef<any>(null);
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string; type: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [projectFocusId, setProjectFocusId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<ManagerData>({
     queryKey: ["/api/businesses", selectedBusinessId, "manager"],
@@ -376,7 +386,7 @@ export default function ManagerView() {
   }, [selectedBusinessId]);
 
   const chatMutation = useMutation({
-    mutationFn: async (payload: { message?: string; mode: string; scanRepos?: boolean; fetchFiles?: string[]; attachments?: { name: string; content: string; type: string }[] }) => {
+    mutationFn: async (payload: { message?: string; mode: string; scanRepos?: boolean; fetchFiles?: string[]; attachments?: { name: string; content: string; type: string }[]; projectFocusId?: string | null }) => {
       const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/manager/chat`, payload);
       return res.json();
     },
@@ -438,7 +448,7 @@ export default function ManagerView() {
     const msg = trimmed || (files.length > 0 ? `[Attached ${files.length} file(s): ${files.map(f => f.name).join(", ")}]` : "");
     setInput("");
     setAttachedFiles([]);
-    chatMutation.mutate({ message: msg, mode: "chat", attachments: files.length > 0 ? files : undefined });
+    chatMutation.mutate({ message: msg, mode: "chat", attachments: files.length > 0 ? files : undefined, projectFocusId });
   };
 
   const isImageType = useCallback((type: string) => {
@@ -734,6 +744,30 @@ export default function ManagerView() {
               {scanReposMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5 mr-1.5" />}
               Scan Repositories
             </Button>
+            {projectStats.length > 0 && (
+              <>
+                <Separator orientation="vertical" className="h-5" />
+                <div className="flex items-center gap-1.5">
+                  <FolderOpen className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Select
+                    value={projectFocusId || "all"}
+                    onValueChange={(val) => setProjectFocusId(val === "all" ? null : val)}
+                  >
+                    <SelectTrigger className="h-7 text-xs w-[180px]" data-testid="select-project-focus">
+                      <SelectValue placeholder="All projects" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All projects</SelectItem>
+                      {projectStats.map(p => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} ({p.total} tasks)
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
           </div>
           <Button size="sm" variant="ghost" onClick={() => clearMutation.mutate()} disabled={clearMutation.isPending || messages.length === 0} data-testid="button-clear-history">
             <Trash2 className="w-3.5 h-3.5 mr-1.5" />
@@ -858,6 +892,17 @@ export default function ManagerView() {
         </ScrollArea>
 
         <div className="p-3 border-t border-border">
+          {projectFocusId && (
+            <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-primary/5 border border-primary/20 rounded-md">
+              <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span className="text-xs text-primary flex-1">
+                Focused on <span className="font-medium">{projectStats.find(p => p.id === projectFocusId)?.name || "project"}</span> — AI has full task context for this project
+              </span>
+              <button onClick={() => setProjectFocusId(null)} className="text-primary/60 hover:text-primary">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
           {attachedFiles.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-2" data-testid="container-attached-files">
               {attachedFiles.map((file, idx) => (
@@ -895,7 +940,7 @@ export default function ManagerView() {
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={attachedFiles.length > 0 ? "Ask about the attached files..." : "Ask the manager anything..."}
+              placeholder={attachedFiles.length > 0 ? "Ask about the attached files..." : projectFocusId ? `Ask about ${projectStats.find(p => p.id === projectFocusId)?.name || "this project"}...` : "Ask the manager anything..."}
               className="resize-none text-sm min-h-[40px] max-h-[120px]"
               rows={1}
               disabled={chatMutation.isPending}

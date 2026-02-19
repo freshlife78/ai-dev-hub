@@ -1896,7 +1896,7 @@ ${fileList.join("\n")}`,
 
   app.post("/api/businesses/:bizId/manager/chat", async (req, res) => {
     const bizId = req.params.bizId;
-    const { message, mode, attachments: uploadedAttachments } = req.body;
+    const { message, mode, attachments: uploadedAttachments, projectFocusId } = req.body;
     const chatMode = mode || "chat";
     const maxAttachmentSize = 100000;
     const maxAttachments = 10;
@@ -2068,7 +2068,43 @@ ${fileList.join("\n")}`,
       contextParts.push(`\nUSER UPLOADED IMAGES: ${imageAttachments.map(a => a.name).join(", ")} (included as image content for visual analysis)`);
     }
 
-    const fullContext = contextParts.join("\n");
+    // Deep project context when focused on a specific project
+    let projectFocusContext = "";
+    if (projectFocusId) {
+      const focusProject = allProjectData.find(pd => pd.project.id === projectFocusId);
+      if (focusProject) {
+        const { project: fp, tasks: fpTasks } = focusProject;
+        projectFocusContext = `\n\n=== PROJECT DEEP DIVE: ${fp.name} ===\nProject ID: ${fp.id}\nDescription: ${fp.description || "No description"}\nTotal Tasks: ${fpTasks.length}\n`;
+
+        const byStatus: Record<string, typeof fpTasks> = {};
+        for (const t of fpTasks) {
+          (byStatus[t.status] = byStatus[t.status] || []).push(t);
+        }
+
+        for (const [status, statusTasks] of Object.entries(byStatus)) {
+          projectFocusContext += `\n## ${status} (${statusTasks.length})\n`;
+          for (const t of statusTasks) {
+            projectFocusContext += `\n### [${t.id}] ${t.title}\n`;
+            projectFocusContext += `Type: ${t.type} | Priority: ${t.priority}`;
+            if (t.filePath) projectFocusContext += ` | File: ${t.filePath}`;
+            if (t.dependencies && t.dependencies.length > 0) {
+              const depNames = t.dependencies.map(dId => {
+                const dt = fpTasks.find(x => x.id === dId);
+                return dt ? `${dId} (${dt.title})` : dId;
+              });
+              projectFocusContext += `\nLinked to: ${depNames.join(", ")}`;
+            }
+            projectFocusContext += `\nDescription: ${t.description || "None"}`;
+            if (t.reasoning) projectFocusContext += `\nReasoning: ${t.reasoning}`;
+            if (t.fixSteps) projectFocusContext += `\nFix Steps: ${t.fixSteps}`;
+            if (t.autoAnalysisResult) projectFocusContext += `\nAnalysis: ${t.autoAnalysisResult}`;
+          }
+        }
+        projectFocusContext += `\n=== END PROJECT DEEP DIVE ===`;
+      }
+    }
+
+    const fullContext = contextParts.join("\n") + projectFocusContext;
 
     let systemPrompt: string;
     let userPrompt: string;
@@ -2118,7 +2154,10 @@ RULES:
       const fileAccessInfo = configuredRepos.length > 0
         ? `\n\nFILE ACCESS: You have direct access to read files from all connected GitHub repositories. When the user mentions file paths in their message, the system AUTOMATICALLY fetches and includes the file contents in your context (shown under FETCHED FILE CONTENTS below). You do NOT need to ask the user to provide file contents — they are already loaded for you. Simply reference and analyze them directly.\n\nIf no file contents appear but you need to see a specific file, mention its exact path (e.g. \`app/(tabs)/index.tsx\`) and the system will fetch it for the next response. To see repository structure and recent commits, ask the user to click "Scan Repositories".\n\nWhen auditing or analyzing a project, proactively reference file paths you want to review — the system will auto-fetch them.`
         : "";
-      systemPrompt = `You are the AI Business Manager for ${biz.name}. You have complete visibility into all projects, tasks, code, and activity for this business. Your role is to:\n- Help prioritize work based on business impact and urgency\n- Identify blockers and risks before they become problems\n- Suggest what to work on next\n- Generate status reports and summaries\n- Connect dots between different projects and tasks\n- Flag when tasks have been stuck too long\n- Identify dependencies between tasks\n- Take action by creating tasks, inbox items, or updating task statuses when asked\n- Review code and file structure from connected repositories\n\nBe proactive, concise, and actionable. Always explain your reasoning. When suggesting priorities, consider: production impact, dependencies, team velocity, and business goals.\n\nYou have memory of this conversation. Reference previous messages when relevant.${fileAccessInfo}${actionInstructions}${projectRef}\n\n${fullContext}`;
+      const projectFocusInstructions = projectFocusId
+        ? `\n\nPROJECT FOCUS: The user is currently focused on a specific project. You have DEEP CONTEXT about every task in this project — their descriptions, statuses, priorities, fix steps, dependencies, and analysis results. Use this to answer questions like "has X been considered?", "what's the status of Y?", "are we missing anything for Z?". Reference specific task IDs when relevant. If the user asks about something not covered by any task, suggest creating one.`
+        : "";
+      systemPrompt = `You are the AI Business Manager for ${biz.name}. You have complete visibility into all projects, tasks, code, and activity for this business. Your role is to:\n- Help prioritize work based on business impact and urgency\n- Identify blockers and risks before they become problems\n- Suggest what to work on next\n- Generate status reports and summaries\n- Connect dots between different projects and tasks\n- Flag when tasks have been stuck too long\n- Identify dependencies between tasks\n- Take action by creating tasks, inbox items, or updating task statuses when asked\n- Review code and file structure from connected repositories\n\nBe proactive, concise, and actionable. Always explain your reasoning. When suggesting priorities, consider: production impact, dependencies, team velocity, and business goals.\n\nYou have memory of this conversation. Reference previous messages when relevant.${projectFocusInstructions}${fileAccessInfo}${actionInstructions}${projectRef}\n\n${fullContext}`;
       if (!message || typeof message !== "string") {
         return res.status(400).json({ message: "message is required" });
       }
