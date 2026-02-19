@@ -162,6 +162,7 @@ export const taskSchema = z.object({
   autoAnalysisResult: autoAnalysisResultEnum.optional(),
   autoAnalysisTimestamp: z.string().optional(),
   generatedPrompts: z.array(generatedPromptSchema).optional().default([]),
+  dependencies: z.array(z.string()).optional().default([]),
 });
 
 export const insertTaskSchema = taskSchema.omit({ id: true, projectId: true, discussion: true });
@@ -335,6 +336,7 @@ export const tasksTable = pgTable("tasks", {
   autoAnalysisResult: varchar("auto_analysis_result", { length: 20 }),
   autoAnalysisTimestamp: text("auto_analysis_timestamp"),
   generatedPrompts: jsonb("generated_prompts").$type<GeneratedPrompt[]>().notNull().default([]),
+  dependencies: jsonb("dependencies").$type<string[]>().notNull().default([]),
 });
 
 export const agentsTable = pgTable("agents", {

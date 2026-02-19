@@ -51,6 +51,9 @@ import {
   Play,
   ExternalLink,
   ChevronLeft,
+  Link2,
+  Unlink,
+  Link,
 } from "lucide-react";
 import type { Task, TaskStatus, RepositorySafe, DiscussionMessage, GeneratedPrompt, AIModel, CodeFix } from "@shared/schema";
 import { AI_MODELS } from "@shared/schema";
@@ -169,11 +172,47 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
   const [branchNameInput, setBranchNameInput] = useState("");
   const [prCreatingFixId, setPrCreatingFixId] = useState<string | null>(null);
+  const [linkingOpen, setLinkingOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: repositories = [] } = useQuery<RepositorySafe[]>({
     queryKey: ["/api/businesses", selectedBusinessId, "repositories"],
     enabled: !!selectedBusinessId,
+  });
+
+  const { data: siblingTasks = [] } = useQuery<Task[]>({
+    queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"],
+    enabled: !!selectedBusinessId && !!projectId,
+  });
+
+  const linkTaskMutation = useMutation({
+    mutationFn: async (taskIds: string[]) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/bulk-link`, { taskIds });
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+      toast({ title: "Tasks linked" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to link tasks", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const unlinkTaskMutation = useMutation({
+    mutationFn: async (dependencyId: string) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/unlink`, { dependencyId });
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+      toast({ title: "Task unlinked" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed to unlink", description: err.message, variant: "destructive" });
+    },
   });
 
   const { data: discussion = [], isLoading: discussionLoading } = useQuery<DiscussionMessage[]>({
@@ -836,6 +875,73 @@ ${task.fixSteps}`;
                 </div>
               </div>
             )}
+
+            {/* Linked Tasks */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Link2 className="w-3 h-3" />
+                  Linked Tasks {task.dependencies && task.dependencies.length > 0 && `(${task.dependencies.length})`}
+                </label>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 text-[10px] px-1.5"
+                  onClick={() => setLinkingOpen(!linkingOpen)}
+                >
+                  {linkingOpen ? "Done" : <><Link className="w-3 h-3 mr-0.5" /> Link</>}
+                </Button>
+              </div>
+              {task.dependencies && task.dependencies.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {task.dependencies.map((depId) => {
+                    const depTask = siblingTasks.find(t => t.id === depId);
+                    if (!depTask) return null;
+                    return (
+                      <div key={depId} className="flex items-center gap-1.5 bg-muted/50 rounded px-2 py-1 group">
+                        <span className="font-mono text-[10px] text-muted-foreground shrink-0">{depTask.id}</span>
+                        <span className="text-xs truncate flex-1">{depTask.title}</span>
+                        <Badge variant="outline" className="text-[8px] shrink-0">{depTask.status}</Badge>
+                        <button
+                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={() => unlinkTaskMutation.mutate(depId)}
+                          title="Unlink"
+                        >
+                          <Unlink className="w-3 h-3 text-muted-foreground hover:text-destructive" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {linkingOpen && (
+                <div className="border border-border rounded-md p-2 space-y-1 max-h-[200px] overflow-y-auto">
+                  {siblingTasks
+                    .filter(t => t.id !== task.id && !(task.dependencies || []).includes(t.id))
+                    .map(t => (
+                      <button
+                        key={t.id}
+                        className="w-full flex items-center gap-1.5 px-2 py-1 rounded hover:bg-muted/50 transition-colors text-left"
+                        onClick={() => {
+                          linkTaskMutation.mutate([task.id, t.id]);
+                        }}
+                      >
+                        <span className="font-mono text-[10px] text-muted-foreground shrink-0">{t.id}</span>
+                        <span className="text-xs truncate flex-1">{t.title}</span>
+                        <Badge variant="outline" className="text-[8px] shrink-0">{t.status}</Badge>
+                      </button>
+                    ))}
+                  {siblingTasks.filter(t => t.id !== task.id && !(task.dependencies || []).includes(t.id)).length === 0 && (
+                    <p className="text-[10px] text-muted-foreground text-center py-2">
+                      {siblingTasks.length <= 1 ? "No other tasks in this project" : "All tasks already linked"}
+                    </p>
+                  )}
+                </div>
+              )}
+              {(!task.dependencies || task.dependencies.length === 0) && !linkingOpen && (
+                <p className="text-[10px] text-muted-foreground">No linked tasks. Click "Link" to connect related tasks.</p>
+              )}
+            </div>
 
             {task.description && (
               <>

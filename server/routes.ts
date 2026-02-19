@@ -365,6 +365,7 @@ export async function registerRoutes(
             filePath: raw.filePath || "",
             autoAnalysisComplete: false,
             generatedPrompts: [],
+            dependencies: [],
           };
 
           const task = await storage.createTask(req.params.projectId, taskData, raw.id);
@@ -435,6 +436,56 @@ export async function registerRoutes(
     if (!repositoryId) return res.status(400).json({ message: "repositoryId is required" });
     const count = await storage.bulkUpdateTasksRepository(req.params.projectId, repositoryId, !!onlyUnlinked);
     res.json({ updated: count });
+  });
+
+  // Bulk-link tasks: link all provided task IDs to each other bidirectionally
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-link", async (req, res) => {
+    const { taskIds } = req.body;
+    if (!Array.isArray(taskIds) || taskIds.length < 2) {
+      return res.status(400).json({ message: "At least 2 task IDs are required" });
+    }
+
+    const tasks = await storage.getTasks(req.params.projectId);
+    const validIds = new Set(tasks.map(t => t.id));
+    const filtered = taskIds.filter((id: string) => validIds.has(id));
+    if (filtered.length < 2) return res.status(400).json({ message: "At least 2 valid task IDs required" });
+
+    let updated = 0;
+    for (const id of filtered) {
+      const task = tasks.find(t => t.id === id);
+      if (!task) continue;
+      const existing = new Set(task.dependencies || []);
+      const newDeps = filtered.filter((d: string) => d !== id);
+      let changed = false;
+      for (const dep of newDeps) {
+        if (!existing.has(dep)) { existing.add(dep); changed = true; }
+      }
+      if (changed) {
+        await storage.updateTask(req.params.projectId, id, { dependencies: Array.from(existing) });
+        updated++;
+      }
+    }
+
+    res.json({ linked: filtered.length, updated });
+  });
+
+  // Unlink a specific dependency from a task
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/unlink", async (req, res) => {
+    const { dependencyId } = req.body;
+    if (!dependencyId) return res.status(400).json({ message: "dependencyId is required" });
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+    const deps = (task.dependencies || []).filter(d => d !== dependencyId);
+    const updated = await storage.updateTask(req.params.projectId, req.params.taskId, { dependencies: deps });
+
+    // Also remove reverse link
+    const depTask = await storage.getTask(req.params.projectId, dependencyId);
+    if (depTask) {
+      const reverseDeps = (depTask.dependencies || []).filter(d => d !== req.params.taskId);
+      await storage.updateTask(req.params.projectId, dependencyId, { dependencies: reverseDeps });
+    }
+
+    res.json(updated);
   });
 
   app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", async (req, res) => {
@@ -780,6 +831,25 @@ Type: ${task.type} | Priority: ${task.priority}`;
 
     const taskContext = `\nTASK DETAILS:\nID: ${task.id}\nTitle: ${task.title}\nType: ${task.type}\nStatus: ${task.status}\nPriority: ${task.priority}\nDescription: ${task.description}\nReasoning: ${task.reasoning}\nFix Steps: ${task.fixSteps}\n${task.filePath ? `Related File: ${task.filePath}` : ""}`;
 
+    // Fetch linked dependency context
+    let dependencyContext = "";
+    if (task.dependencies && task.dependencies.length > 0) {
+      const depTasks = [];
+      for (const depId of task.dependencies) {
+        const depTask = await storage.getTask(req.params.projectId, depId);
+        if (depTask) depTasks.push(depTask);
+      }
+      if (depTasks.length > 0) {
+        dependencyContext = "\n\nLINKED TASKS (this task is connected to these — consider their context when responding):";
+        for (const dt of depTasks) {
+          dependencyContext += `\n- [${dt.id}] ${dt.title} (${dt.type} | ${dt.status} | ${dt.priority})`;
+          dependencyContext += `\n  Description: ${dt.description.slice(0, 300)}${dt.description.length > 300 ? "..." : ""}`;
+          if (dt.fixSteps) dependencyContext += `\n  Fix Steps: ${dt.fixSteps.slice(0, 200)}${dt.fixSteps.length > 200 ? "..." : ""}`;
+          if (dt.filePath) dependencyContext += `\n  File: ${dt.filePath}`;
+        }
+      }
+    }
+
     let codeContext = "";
     if (loadedFiles.length > 0) {
       if (isReverification) {
@@ -814,7 +884,7 @@ Type: ${task.type} | Priority: ${task.priority}`;
     if (isAutoAnalysis) {
       systemPrompt = `You are a friendly, experienced developer colleague helping review a task in a software project. You have access to the task details and any relevant source code files.
 
-${taskContext}${codeContext}${codeReviewContext}
+${taskContext}${dependencyContext}${codeContext}${codeReviewContext}
 
 When responding:
 - Be conversational and natural, like a helpful colleague — not a formal auditor
@@ -833,7 +903,7 @@ When responding:
     } else {
       systemPrompt = `You are a friendly, experienced developer colleague helping with a specific task in a software project. You have access to the task details, code review results, and any loaded source files.
 
-${taskContext}${codeContext}${codeReviewContext}
+${taskContext}${dependencyContext}${codeContext}${codeReviewContext}
 
 When responding in this task discussion:
 - Be conversational and natural, like a helpful colleague who genuinely wants to help
@@ -986,6 +1056,23 @@ Example of the tone to aim for:
 
     const taskContext = `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`;
 
+    // Fetch linked dependency context for code fix generation
+    let depContext = "";
+    if (task.dependencies && task.dependencies.length > 0) {
+      const depTasks = [];
+      for (const depId of task.dependencies) {
+        const dt = await storage.getTask(req.params.projectId, depId);
+        if (dt) depTasks.push(dt);
+      }
+      if (depTasks.length > 0) {
+        depContext = "\n\nLINKED TASKS (consider these when generating the fix):";
+        for (const dt of depTasks) {
+          depContext += `\n- [${dt.id}] ${dt.title} (${dt.status}): ${dt.description.slice(0, 200)}`;
+          if (dt.filePath) depContext += ` | File: ${dt.filePath}`;
+        }
+      }
+    }
+
     const filesContext = fileContents.map(f =>
       `FILE: ${f.path}\n\`\`\`\n${f.content.length > 12000 ? f.content.slice(0, 12000) + "\n[truncated]" : f.content}\n\`\`\``
     ).join("\n\n");
@@ -996,7 +1083,7 @@ Example of the tone to aim for:
 
     const systemPrompt = `You are an expert software developer. Generate a precise code fix for the given task.
 
-${taskContext}
+${taskContext}${depContext}
 
 SOURCE FILES:
 ${filesContext}

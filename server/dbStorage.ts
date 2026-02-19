@@ -84,6 +84,7 @@ function rowToTask(row: any): Task {
     autoAnalysisResult: row.autoAnalysisResult || undefined,
     autoAnalysisTimestamp: row.autoAnalysisTimestamp || undefined,
     generatedPrompts: row.generatedPrompts || [],
+    dependencies: row.dependencies || [],
   };
 }
 
@@ -354,6 +355,7 @@ export class DatabaseStorage implements IStorage {
       reasoning: data.reasoning || "", fixSteps: data.fixSteps || "",
       replitPrompt: data.replitPrompt || "", filePath: data.filePath || "",
       discussion: [], autoAnalysisComplete: false, generatedPrompts: [],
+      dependencies: data.dependencies || [],
     };
     await db.insert(tasksTable).values({
       id: task.id, projectId: task.projectId, repositoryId: task.repositoryId,
@@ -549,7 +551,7 @@ export class DatabaseStorage implements IStorage {
       type: taskType as any, status: "Open", priority: item.priority as any,
       title: item.title, description: item.description, reasoning: "",
       fixSteps: "", replitPrompt: "", filePath: "", repositoryId: "",
-      autoAnalysisComplete: false, generatedPrompts: [],
+      autoAnalysisComplete: false, generatedPrompts: [], dependencies: [],
     });
     const updatedItem = await this.updateInboxItem(bizId, id, { status: "Assigned", linkedProjectId: projectId, linkedTaskId: task.id });
     return { inboxItem: updatedItem || item, task };

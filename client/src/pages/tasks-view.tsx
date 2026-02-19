@@ -46,6 +46,9 @@ import {
   Loader2,
   MoreVertical,
   FolderOutput,
+  Link,
+  X,
+  CheckSquare2,
 } from "lucide-react";
 import type { Task, Project, RepositorySafe } from "@shared/schema";
 import {
@@ -252,6 +255,8 @@ function ProjectTasksView() {
   const [bulkRepoDialogOpen, setBulkRepoDialogOpen] = useState(false);
   const [bulkRepoId, setBulkRepoId] = useState<string>("");
   const [bulkOnlyUnlinked, setBulkOnlyUnlinked] = useState(true);
+  const [selectedForLink, setSelectedForLink] = useState<Set<string>>(new Set());
+  const [linkMode, setLinkMode] = useState(false);
 
   const { data: project } = useQuery<Project>({
     queryKey: ["/api/businesses", selectedBusinessId, "projects", selectedProjectId],
@@ -315,6 +320,40 @@ function ProjectTasksView() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
+
+  const bulkLinkMutation = useMutation({
+    mutationFn: async (taskIds: string[]) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${selectedProjectId}/tasks/bulk-link`, { taskIds });
+      return res.json();
+    },
+    onSuccess: (data: { linked: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", selectedProjectId, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+      toast({ title: `${data.linked} tasks linked together` });
+      setSelectedForLink(new Set());
+      setLinkMode(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error linking tasks", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const toggleTaskSelection = (taskId: string) => {
+    setSelectedForLink(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
+  const selectAllFilteredTasks = (filtered: Task[]) => {
+    if (selectedForLink.size === filtered.length) {
+      setSelectedForLink(new Set());
+    } else {
+      setSelectedForLink(new Set(filtered.map(t => t.id)));
+    }
+  };
 
   const deleteMutation = useMutation({
     mutationFn: async (taskId: string) => {
@@ -392,6 +431,16 @@ function ProjectTasksView() {
                   Link Repository
                 </Button>
               )}
+              {tasks.length >= 2 && (
+                <Button
+                  variant={linkMode ? "secondary" : "outline"}
+                  onClick={() => { setLinkMode(!linkMode); setSelectedForLink(new Set()); }}
+                  data-testid="button-link-tasks-mode"
+                >
+                  <Link className="w-4 h-4 mr-1" />
+                  {linkMode ? "Cancel Linking" : "Link Tasks"}
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setImportDialogOpen(true)} data-testid="button-import-tasks">
                 <Upload className="w-4 h-4 mr-1" />
                 Import Tasks
@@ -464,6 +513,33 @@ function ProjectTasksView() {
           ))}
         </div>
 
+        {linkMode && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-primary/5 border-b border-primary/20">
+            <Checkbox
+              checked={selectedForLink.size === filteredTasks.length && filteredTasks.length > 0}
+              onCheckedChange={() => selectAllFilteredTasks(filteredTasks)}
+            />
+            <span className="text-xs text-muted-foreground flex-1">
+              {selectedForLink.size === 0
+                ? "Select tasks to link together"
+                : `${selectedForLink.size} task${selectedForLink.size !== 1 ? "s" : ""} selected`}
+            </span>
+            {selectedForLink.size >= 2 && (
+              <Button
+                size="sm"
+                onClick={() => bulkLinkMutation.mutate(Array.from(selectedForLink))}
+                disabled={bulkLinkMutation.isPending}
+              >
+                {bulkLinkMutation.isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Link className="w-3 h-3 mr-1" />}
+                Link {selectedForLink.size} Tasks
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => { setLinkMode(false); setSelectedForLink(new Set()); }}>
+              <X className="w-3 h-3" />
+            </Button>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4 space-y-2">
           {isLoading ? (
             Array.from({ length: 5 }).map((_, i) => (
@@ -482,11 +558,19 @@ function ProjectTasksView() {
                   key={task.id}
                   className={`p-3 cursor-pointer transition-colors hover-elevate ${
                     selectedTaskId === task.id ? "ring-1 ring-primary" : ""
-                  }`}
-                  onClick={() => setSelectedTaskId(task.id)}
+                  } ${linkMode && selectedForLink.has(task.id) ? "ring-1 ring-primary bg-primary/5" : ""}`}
+                  onClick={() => linkMode ? toggleTaskSelection(task.id) : setSelectedTaskId(task.id)}
                   data-testid={`task-card-${task.id}`}
                 >
                   <div className="flex items-start gap-3">
+                    {linkMode && (
+                      <Checkbox
+                        checked={selectedForLink.has(task.id)}
+                        onCheckedChange={() => toggleTaskSelection(task.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-0.5 shrink-0"
+                      />
+                    )}
                     <TypeIcon className={`w-4 h-4 mt-0.5 shrink-0 ${typeColors[task.type]}`} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -496,6 +580,12 @@ function ProjectTasksView() {
                         <span className={`inline-flex items-center text-xs px-1.5 py-0.5 rounded-md border ${statusColors[task.status]}`}>
                           {task.status}
                         </span>
+                        {task.dependencies && task.dependencies.length > 0 && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] text-muted-foreground">
+                            <Link className="w-3 h-3" />
+                            {task.dependencies.length}
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm font-medium mt-0.5 truncate" data-testid={`text-task-title-${task.id}`}>
                         {task.title}
