@@ -88,6 +88,29 @@ export const aiModelEnum = z.enum([
   "claude-opus-4-20250514",
 ]);
 
+export const codeFixFileSchema = z.object({
+  path: z.string(),
+  originalContent: z.string(),
+  newContent: z.string(),
+  description: z.string(),
+});
+
+export const codeFixSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  timestamp: z.string(),
+  commitMessage: z.string(),
+  description: z.string(),
+  files: z.array(codeFixFileSchema),
+  status: z.enum(["generated", "pr_created", "merged", "discarded"]).default("generated"),
+  prUrl: z.string().optional(),
+  prNumber: z.number().optional(),
+  branchName: z.string().optional(),
+});
+
+export type CodeFix = z.infer<typeof codeFixSchema>;
+export type CodeFixFile = z.infer<typeof codeFixFileSchema>;
+
 export const discussionMessageSchema = z.object({
   id: z.string(),
   sender: z.enum(["user", "claude"]),
@@ -97,6 +120,7 @@ export const discussionMessageSchema = z.object({
   isAutoAnalysis: z.boolean().optional().default(false),
   isReverification: z.boolean().optional().default(false),
   model: aiModelEnum.optional(),
+  codeFix: codeFixSchema.optional(),
 });
 
 export type DiscussionMessage = z.infer<typeof discussionMessageSchema>;

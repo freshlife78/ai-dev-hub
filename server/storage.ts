@@ -56,6 +56,7 @@ export interface IStorage {
 
   getDiscussion(projectId: string, taskId: string): Promise<DiscussionMessage[]>;
   addDiscussionMessage(projectId: string, taskId: string, message: Omit<DiscussionMessage, "id">): Promise<DiscussionMessage | undefined>;
+  updateDiscussionCodeFix(projectId: string, taskId: string, codeFixId: string, codeFix: any): Promise<void>;
 
   addGeneratedPrompt(projectId: string, taskId: string, prompt: { source: "code_review" | "discussion"; prompt: string; filePath?: string }): Promise<Task | undefined>;
 

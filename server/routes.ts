@@ -2,9 +2,10 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { seedData } from "./seed";
-import { insertProjectSchema, insertTaskSchema, insertBusinessSchema, insertRepositorySchema, type InsertTask, type ManagerAction } from "@shared/schema";
+import { insertProjectSchema, insertTaskSchema, insertBusinessSchema, insertRepositorySchema, type InsertTask, type ManagerAction, type CodeFix, type CodeFixFile } from "@shared/schema";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Repository } from "@shared/schema";
+import crypto from "crypto";
 
 interface GitHubTreeItem {
   path: string;
@@ -904,6 +905,346 @@ Example of the tone to aim for:
         statusCode = 429;
       }
       res.status(statusCode).json({ message: errorMsg });
+    }
+  });
+
+  // Generate a code fix for a task using AI
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/generate-code-fix", async (req, res) => {
+    const { model, instructions } = req.body;
+    const selectedModel = model || "claude-sonnet-4-5-20250929";
+
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    const bizId = req.params.bizId;
+    const reviewAgent = await storage.getReviewAgent(bizId);
+    const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ message: "No AI agent configured." });
+
+    const repoId = task.repositoryId;
+    let repo: any = null;
+    if (repoId) {
+      repo = await storage.getRepositoryWithToken(repoId);
+    }
+    if (!repo && bizId) {
+      const bizRepos = await storage.getRepositoriesWithTokens(bizId);
+      if (bizRepos.length === 1) {
+        repo = bizRepos[0];
+      } else if (bizRepos.length > 1) {
+        const project = await storage.getProject(bizId, req.params.projectId);
+        if (project?.defaultRepositoryId) {
+          repo = bizRepos.find(r => r.id === project.defaultRepositoryId) || bizRepos[0];
+        } else {
+          repo = bizRepos[0];
+        }
+      }
+    }
+
+    if (!repo || !repo.token || !repo.owner || !repo.repo) {
+      return res.status(400).json({ message: "No GitHub repository configured for this task." });
+    }
+
+    // Gather file context from task and discussion history
+    const filePaths = new Set<string>();
+    if (task.filePath) filePaths.add(task.filePath);
+
+    const discussion = await storage.getDiscussion(req.params.projectId, req.params.taskId);
+    for (const msg of discussion) {
+      if (msg.filesLoaded) {
+        for (const f of msg.filesLoaded) filePaths.add(f);
+      }
+    }
+
+    const headers = {
+      Authorization: `token ${repo.token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "AI-Dev-Hub",
+    };
+
+    // Fetch current file contents from GitHub
+    const fileContents: { path: string; content: string; sha: string }[] = [];
+    for (const fp of Array.from(filePaths)) {
+      try {
+        const encodedPath = fp.split("/").map(encodeURIComponent).join("/");
+        const ghRes = await fetch(
+          `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}`,
+          { headers }
+        );
+        if (ghRes.ok) {
+          const data = await ghRes.json();
+          if (data.encoding === "base64" && data.content) {
+            const decoded = Buffer.from(data.content, "base64").toString("utf-8");
+            fileContents.push({ path: fp, content: decoded, sha: data.sha });
+          }
+        }
+      } catch {}
+    }
+
+    if (fileContents.length === 0) {
+      return res.status(400).json({ message: "Could not load any source files to generate a fix." });
+    }
+
+    const taskContext = `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`;
+
+    const filesContext = fileContents.map(f =>
+      `FILE: ${f.path}\n\`\`\`\n${f.content.length > 12000 ? f.content.slice(0, 12000) + "\n[truncated]" : f.content}\n\`\`\``
+    ).join("\n\n");
+
+    const recentDiscussion = discussion.slice(-6).map(m =>
+      `${m.sender === "user" ? "User" : "AI"}: ${m.content.slice(0, 500)}`
+    ).join("\n\n");
+
+    const systemPrompt = `You are an expert software developer. Generate a precise code fix for the given task.
+
+${taskContext}
+
+SOURCE FILES:
+${filesContext}
+
+${recentDiscussion ? `RECENT DISCUSSION:\n${recentDiscussion}` : ""}
+
+${instructions ? `ADDITIONAL INSTRUCTIONS: ${instructions}` : ""}
+
+You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no extra text) in this exact format:
+{
+  "commitMessage": "Short descriptive commit message",
+  "description": "Brief explanation of what the fix does and why",
+  "files": [
+    {
+      "path": "exact/file/path.ext",
+      "newContent": "the complete new file content with the fix applied",
+      "description": "what changed in this file"
+    }
+  ]
+}
+
+Rules:
+- Include the COMPLETE file content in newContent, not just the changed lines
+- Only include files that actually need changes
+- Make minimal, focused changes — don't refactor unrelated code
+- The commit message should be concise and descriptive`;
+
+    try {
+      const anthropic = new Anthropic({ apiKey });
+      const aiMsg = await anthropic.messages.create({
+        model: selectedModel,
+        max_tokens: 8192,
+        messages: [{ role: "user", content: "Generate the code fix now. Respond with ONLY the JSON object." }],
+        system: systemPrompt,
+      });
+
+      const responseText = aiMsg.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+
+      let parsed: any;
+      try {
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+      } catch {
+        return res.status(500).json({ message: "AI did not return valid JSON. Try again." });
+      }
+
+      const fixId = `fix-${crypto.randomUUID().slice(0, 8)}`;
+      const codeFix: CodeFix = {
+        id: fixId,
+        taskId: task.id,
+        timestamp: new Date().toISOString(),
+        commitMessage: parsed.commitMessage || "Fix: " + task.title,
+        description: parsed.description || "",
+        files: (parsed.files || []).map((f: any) => {
+          const original = fileContents.find(fc => fc.path === f.path);
+          return {
+            path: f.path,
+            originalContent: original?.content || "",
+            newContent: f.newContent || "",
+            description: f.description || "",
+          };
+        }),
+        status: "generated",
+      };
+
+      // Save as a discussion message with the code fix attached
+      await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+        sender: "claude",
+        content: `**Generated Code Fix**\n\n${codeFix.description}\n\n**Files to change:** ${codeFix.files.map(f => f.path).join(", ")}\n\n**Commit message:** ${codeFix.commitMessage}`,
+        timestamp: new Date().toISOString(),
+        filesLoaded: codeFix.files.map(f => f.path),
+        isAutoAnalysis: false,
+        isReverification: false,
+        model: selectedModel,
+        codeFix,
+      });
+
+      const allMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
+      res.json({ codeFix, messages: allMessages });
+    } catch (err: any) {
+      let errorMsg = err.message || "Unknown error";
+      if (err.status === 429 || errorMsg.includes("rate_limit")) {
+        errorMsg = "AI rate limit reached. Please wait a moment and try again.";
+      }
+      res.status(err.status === 429 ? 429 : 500).json({ message: errorMsg });
+    }
+  });
+
+  // Create a Pull Request from a generated code fix
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/create-pr", async (req, res) => {
+    const { codeFixId, branchName } = req.body;
+    if (!codeFixId) return res.status(400).json({ message: "codeFixId is required" });
+
+    const task = await storage.getTask(req.params.projectId, req.params.taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    // Find the code fix from discussion messages
+    const discussion = await storage.getDiscussion(req.params.projectId, req.params.taskId);
+    const fixMessage = discussion.find(m => m.codeFix?.id === codeFixId);
+    if (!fixMessage?.codeFix) return res.status(404).json({ message: "Code fix not found" });
+
+    const codeFix = fixMessage.codeFix;
+    const bizId = req.params.bizId;
+
+    // Get repo
+    const repoId = task.repositoryId;
+    let repo: any = null;
+    if (repoId) repo = await storage.getRepositoryWithToken(repoId);
+    if (!repo && bizId) {
+      const bizRepos = await storage.getRepositoriesWithTokens(bizId);
+      if (bizRepos.length >= 1) {
+        const project = await storage.getProject(bizId, req.params.projectId);
+        repo = (project?.defaultRepositoryId
+          ? bizRepos.find(r => r.id === project.defaultRepositoryId)
+          : null) || bizRepos[0];
+      }
+    }
+
+    if (!repo || !repo.token || !repo.owner || !repo.repo) {
+      return res.status(400).json({ message: "No GitHub repository configured." });
+    }
+
+    const headers = {
+      Authorization: `token ${repo.token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": "AI-Dev-Hub",
+      "Content-Type": "application/json",
+    };
+
+    const safeBranchName = branchName || `ai-fix/${task.id.toLowerCase()}`;
+
+    try {
+      // 1. Get default branch SHA
+      const repoRes = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}`, { headers });
+      if (!repoRes.ok) return res.status(500).json({ message: "Failed to fetch repository info" });
+      const repoInfo = await repoRes.json();
+      const defaultBranch = repoInfo.default_branch || "main";
+
+      const refRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs/heads/${defaultBranch}`,
+        { headers }
+      );
+      if (!refRes.ok) return res.status(500).json({ message: "Failed to get branch reference" });
+      const refData = await refRes.json();
+      const baseSha = refData.object.sha;
+
+      // 2. Create new branch
+      const createBranchRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ref: `refs/heads/${safeBranchName}`, sha: baseSha }),
+        }
+      );
+      if (!createBranchRes.ok) {
+        const err = await createBranchRes.json();
+        return res.status(500).json({ message: `Failed to create branch: ${err.message || "Unknown error"}` });
+      }
+
+      // 3. Commit each file change
+      for (const file of codeFix.files) {
+        const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+
+        // Get current file SHA on the new branch
+        const fileRes = await fetch(
+          `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=${safeBranchName}`,
+          { headers }
+        );
+        let fileSha: string | undefined;
+        if (fileRes.ok) {
+          const fileData = await fileRes.json();
+          fileSha = fileData.sha;
+        }
+
+        // Update or create the file
+        const updateRes = await fetch(
+          `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}`,
+          {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({
+              message: `${codeFix.commitMessage} - ${file.path}`,
+              content: Buffer.from(file.newContent).toString("base64"),
+              branch: safeBranchName,
+              ...(fileSha ? { sha: fileSha } : {}),
+            }),
+          }
+        );
+        if (!updateRes.ok) {
+          const err = await updateRes.json();
+          return res.status(500).json({ message: `Failed to update ${file.path}: ${err.message || "Unknown error"}` });
+        }
+      }
+
+      // 4. Create Pull Request
+      const prBody = `## ${codeFix.description}\n\n**Task:** ${task.id} — ${task.title}\n**Type:** ${task.type} | **Priority:** ${task.priority}\n\n### Changes\n${codeFix.files.map(f => `- \`${f.path}\`: ${f.description}`).join("\n")}\n\n---\n*Generated by AI Dev Hub*`;
+
+      const prRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/pulls`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: `[${task.id}] ${codeFix.commitMessage}`,
+            body: prBody,
+            head: safeBranchName,
+            base: defaultBranch,
+          }),
+        }
+      );
+
+      if (!prRes.ok) {
+        const err = await prRes.json();
+        return res.status(500).json({ message: `Failed to create PR: ${err.message || "Unknown error"}` });
+      }
+
+      const prData = await prRes.json();
+
+      // 5. Update the code fix with PR info
+      const updatedFix: CodeFix = {
+        ...codeFix,
+        status: "pr_created",
+        prUrl: prData.html_url,
+        prNumber: prData.number,
+        branchName: safeBranchName,
+      };
+
+      // Update the discussion message with PR info
+      await storage.updateDiscussionCodeFix(req.params.projectId, req.params.taskId, codeFixId, updatedFix);
+
+      // Add a new message about the PR
+      await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+        sender: "claude",
+        content: `**Pull Request Created!**\n\n**PR #${prData.number}:** [${prData.title}](${prData.html_url})\n**Branch:** \`${safeBranchName}\` → \`${defaultBranch}\`\n\n${codeFix.files.length} file${codeFix.files.length !== 1 ? "s" : ""} changed. Review and merge when ready.`,
+        timestamp: new Date().toISOString(),
+        filesLoaded: codeFix.files.map(f => f.path),
+        isAutoAnalysis: false,
+        isReverification: false,
+      });
+
+      const allMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
+      res.json({ prUrl: prData.html_url, prNumber: prData.number, branchName: safeBranchName, messages: allMessages });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message || "Failed to create PR" });
     }
   });
 

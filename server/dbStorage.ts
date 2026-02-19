@@ -446,6 +446,18 @@ export class DatabaseStorage implements IStorage {
     return full;
   }
 
+  async updateDiscussionCodeFix(projectId: string, taskId: string, codeFixId: string, codeFix: any): Promise<void> {
+    const task = await this.getTask(projectId, taskId);
+    if (!task) return;
+    const discussion = (task.discussion || []).map(msg => {
+      if (msg.codeFix?.id === codeFixId) {
+        return { ...msg, codeFix };
+      }
+      return msg;
+    });
+    await db.update(tasksTable).set({ discussion }).where(and(eq(tasksTable.projectId, projectId), eq(tasksTable.id, taskId)));
+  }
+
   async addGeneratedPrompt(projectId: string, taskId: string, prompt: { source: "code_review" | "discussion"; prompt: string; filePath?: string }): Promise<Task | undefined> {
     const task = await this.getTask(projectId, taskId);
     if (!task) return undefined;

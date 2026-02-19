@@ -45,8 +45,14 @@ import {
   PanelLeftOpen,
   Zap,
   BrainCircuit,
+  GitPullRequest,
+  GitBranch,
+  Diff,
+  Play,
+  ExternalLink,
+  ChevronLeft,
 } from "lucide-react";
-import type { Task, TaskStatus, RepositorySafe, DiscussionMessage, GeneratedPrompt, AIModel } from "@shared/schema";
+import type { Task, TaskStatus, RepositorySafe, DiscussionMessage, GeneratedPrompt, AIModel, CodeFix } from "@shared/schema";
 import { AI_MODELS } from "@shared/schema";
 import ReactMarkdown from "react-markdown";
 import {
@@ -60,6 +66,81 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+
+function computeSimpleDiff(original: string, modified: string): { type: "same" | "added" | "removed"; line: string; lineNum?: number }[] {
+  const origLines = original.split("\n");
+  const modLines = modified.split("\n");
+  const result: { type: "same" | "added" | "removed"; line: string; lineNum?: number }[] = [];
+
+  let i = 0, j = 0;
+  while (i < origLines.length || j < modLines.length) {
+    if (i < origLines.length && j < modLines.length && origLines[i] === modLines[j]) {
+      result.push({ type: "same", line: origLines[i], lineNum: j + 1 });
+      i++; j++;
+    } else if (j < modLines.length && (i >= origLines.length || !origLines.includes(modLines[j]))) {
+      result.push({ type: "added", line: modLines[j], lineNum: j + 1 });
+      j++;
+    } else if (i < origLines.length) {
+      result.push({ type: "removed", line: origLines[i] });
+      i++;
+    }
+  }
+  return result;
+}
+
+function DiffView({ original, modified }: { original: string; modified: string }) {
+  const lines = computeSimpleDiff(original, modified);
+
+  // Only show changed lines and a few lines of context around them
+  const changedIndices = new Set<number>();
+  lines.forEach((l, idx) => {
+    if (l.type !== "same") {
+      for (let c = Math.max(0, idx - 2); c <= Math.min(lines.length - 1, idx + 2); c++) {
+        changedIndices.add(c);
+      }
+    }
+  });
+
+  const visibleLines: (typeof lines[0] & { collapsed?: boolean })[] = [];
+  let lastIdx = -1;
+  for (let idx = 0; idx < lines.length; idx++) {
+    if (changedIndices.has(idx)) {
+      if (lastIdx !== -1 && idx - lastIdx > 1) {
+        visibleLines.push({ type: "same", line: `... ${idx - lastIdx - 1} unchanged lines ...`, collapsed: true });
+      }
+      visibleLines.push(lines[idx]);
+      lastIdx = idx;
+    }
+  }
+  if (lastIdx < lines.length - 1 && lastIdx !== -1) {
+    visibleLines.push({ type: "same", line: `... ${lines.length - 1 - lastIdx} unchanged lines ...`, collapsed: true });
+  }
+
+  if (visibleLines.length === 0) {
+    return <div className="px-3 py-2 text-[10px] text-muted-foreground italic">No differences found</div>;
+  }
+
+  return (
+    <div className="font-mono text-[10px] leading-4">
+      {visibleLines.map((l, idx) => (
+        <div
+          key={idx}
+          className={`px-3 flex ${
+            (l as any).collapsed ? "text-muted-foreground/50 italic" :
+            l.type === "added" ? "bg-green-500/10 text-green-400" :
+            l.type === "removed" ? "bg-red-500/10 text-red-400" :
+            "text-muted-foreground"
+          }`}
+        >
+          <span className="w-5 shrink-0 text-right mr-2 select-none opacity-50">
+            {(l as any).collapsed ? "" : l.type === "added" ? "+" : l.type === "removed" ? "-" : " "}
+          </span>
+          <span className="whitespace-pre overflow-hidden text-ellipsis">{l.line || " "}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const priorityConfig: Record<string, { icon: typeof ArrowUp; color: string; label: string }> = {
   High: { icon: ArrowUp, color: "text-red-400", label: "High" },
@@ -85,6 +166,9 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const [promptsExpanded, setPromptsExpanded] = useState(false);
   const [selectedModel, setSelectedModel] = useState<AIModel>("claude-sonnet-4-5-20250929");
   const [filesPanelOpen, setFilesPanelOpen] = useState(true);
+  const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
+  const [branchNameInput, setBranchNameInput] = useState("");
+  const [prCreatingFixId, setPrCreatingFixId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: repositories = [] } = useQuery<RepositorySafe[]>({
@@ -138,6 +222,64 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
       }
     },
   });
+
+  const generateFixMutation = useMutation({
+    mutationFn: async (instructions?: string) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/generate-code-fix`, {
+        model: selectedModel,
+        instructions,
+      });
+      return await res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"] });
+      toast({ title: "Code fix generated", description: "Review the diff below and create a PR when ready." });
+    },
+    onError: (err: any) => {
+      let description = err.message || "Unknown error";
+      try {
+        const cleaned = description.replace(/^\d+:\s*/, "");
+        const parsed = JSON.parse(cleaned);
+        if (parsed.message) description = parsed.message;
+      } catch {}
+      toast({ title: "Failed to generate fix", description, variant: "destructive" });
+    },
+  });
+
+  const createPrMutation = useMutation({
+    mutationFn: async (params: { codeFixId: string; branchName?: string }) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/create-pr`, {
+        codeFixId: params.codeFixId,
+        branchName: params.branchName,
+      });
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"] });
+      setPrCreatingFixId(null);
+      setBranchNameInput("");
+      toast({ title: "Pull Request created!", description: `PR #${data.prNumber} opened successfully.` });
+    },
+    onError: (err: any) => {
+      let description = err.message || "Unknown error";
+      try {
+        const cleaned = description.replace(/^\d+:\s*/, "");
+        const parsed = JSON.parse(cleaned);
+        if (parsed.message) description = parsed.message;
+      } catch {}
+      toast({ title: "Failed to create PR", description, variant: "destructive" });
+    },
+  });
+
+  const toggleDiffExpanded = (fixId: string, filePath: string) => {
+    const key = `${fixId}:${filePath}`;
+    setExpandedDiffs(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const triggerAutoAnalysis = useCallback(() => {
     setAutoAnalysisTriggered(true);
@@ -440,7 +582,7 @@ ${task.fixSteps}`;
                 <span className="text-[10px] text-blue-500 font-medium">Re-fetched {msg.filesLoaded.length} file{msg.filesLoaded.length !== 1 ? "s" : ""} from GitHub main</span>
               </div>
             )}
-            {msg.filesLoaded && msg.filesLoaded.length > 0 && (
+            {msg.filesLoaded && msg.filesLoaded.length > 0 && !msg.codeFix && (
               <div className={`flex flex-col gap-1 mt-1.5 ${msg.sender === "user" ? "items-end" : "items-start"}`}>
                 {msg.filesLoaded.map((fp) => (
                   <div key={fp} className="inline-flex items-center gap-1 bg-muted/60 rounded px-2 py-0.5" data-testid={`file-loaded-${fp}`}>
@@ -448,6 +590,104 @@ ${task.fixSteps}`;
                     <span className="font-mono text-[10px] text-muted-foreground">{fp}</span>
                   </div>
                 ))}
+              </div>
+            )}
+            {msg.codeFix && (
+              <div className="mt-2 border border-border rounded-md overflow-hidden" data-testid={`code-fix-${msg.codeFix.id}`}>
+                <div className="bg-muted/50 px-3 py-2 flex items-center justify-between border-b border-border">
+                  <div className="flex items-center gap-2">
+                    <Diff className="w-3.5 h-3.5 text-primary" />
+                    <span className="text-xs font-medium">Code Fix</span>
+                    <Badge variant="outline" className="text-[9px]">
+                      {msg.codeFix.files.length} file{msg.codeFix.files.length !== 1 ? "s" : ""}
+                    </Badge>
+                    {msg.codeFix.status === "pr_created" && (
+                      <Badge className="text-[9px] bg-green-500/15 text-green-500 border-green-500/30">
+                        <GitPullRequest className="w-2.5 h-2.5 mr-0.5" />
+                        PR Created
+                      </Badge>
+                    )}
+                  </div>
+                  {msg.codeFix.status === "generated" && (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="h-6 text-[10px] gap-1"
+                      onClick={() => setPrCreatingFixId(msg.codeFix!.id)}
+                      disabled={createPrMutation.isPending}
+                    >
+                      <GitPullRequest className="w-3 h-3" />
+                      Create PR
+                    </Button>
+                  )}
+                  {msg.codeFix.prUrl && (
+                    <a
+                      href={msg.codeFix.prUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      PR #{msg.codeFix.prNumber}
+                    </a>
+                  )}
+                </div>
+
+                {prCreatingFixId === msg.codeFix.id && (
+                  <div className="px-3 py-2 bg-muted/30 border-b border-border flex items-center gap-2">
+                    <GitBranch className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <input
+                      type="text"
+                      placeholder={`ai-fix/${task.id.toLowerCase()}`}
+                      value={branchNameInput}
+                      onChange={(e) => setBranchNameInput(e.target.value)}
+                      className="flex-1 bg-background border border-border rounded px-2 py-1 text-xs font-mono"
+                    />
+                    <Button
+                      size="sm"
+                      className="h-6 text-[10px] gap-1"
+                      onClick={() => createPrMutation.mutate({
+                        codeFixId: msg.codeFix!.id,
+                        branchName: branchNameInput.trim() || undefined,
+                      })}
+                      disabled={createPrMutation.isPending}
+                    >
+                      {createPrMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                      {createPrMutation.isPending ? "Creating..." : "Go"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 text-[10px]"
+                      onClick={() => { setPrCreatingFixId(null); setBranchNameInput(""); }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+
+                {msg.codeFix.files.map((file) => {
+                  const diffKey = `${msg.codeFix!.id}:${file.path}`;
+                  const isExpanded = expandedDiffs.has(diffKey);
+                  return (
+                    <div key={file.path} className="border-b border-border last:border-b-0">
+                      <button
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/30 transition-colors"
+                        onClick={() => toggleDiffExpanded(msg.codeFix!.id, file.path)}
+                      >
+                        {isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        <FileCode className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <span className="font-mono text-[10px] text-foreground truncate">{file.path}</span>
+                        <span className="text-[9px] text-muted-foreground ml-auto shrink-0">{file.description}</span>
+                      </button>
+                      {isExpanded && (
+                        <div className="bg-background overflow-x-auto max-h-[300px] overflow-y-auto">
+                          <DiffView original={file.originalContent} modified={file.newContent} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
             {isAuto && (
@@ -908,33 +1148,57 @@ ${task.fixSteps}`;
                 </Button>
               </div>
               <div className="flex items-center justify-between mt-1.5">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-5 gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5" data-testid="button-model-selector">
-                      <BrainCircuit className="w-3 h-3" />
-                      {currentModelInfo.label}
-                      <ChevronDown className="w-2.5 h-2.5" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-52">
-                    {AI_MODELS.map(m => (
-                      <DropdownMenuItem
-                        key={m.id}
-                        onClick={() => setSelectedModel(m.id)}
-                        className={`flex items-center justify-between ${selectedModel === m.id ? "bg-accent" : ""}`}
-                        data-testid={`model-option-${m.id}`}
+                <div className="flex items-center gap-1">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-5 gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5" data-testid="button-model-selector">
+                        <BrainCircuit className="w-3 h-3" />
+                        {currentModelInfo.label}
+                        <ChevronDown className="w-2.5 h-2.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-52">
+                      {AI_MODELS.map(m => (
+                        <DropdownMenuItem
+                          key={m.id}
+                          onClick={() => setSelectedModel(m.id)}
+                          className={`flex items-center justify-between ${selectedModel === m.id ? "bg-accent" : ""}`}
+                          data-testid={`model-option-${m.id}`}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-xs font-medium">{m.label}</span>
+                            <span className="text-[10px] text-muted-foreground">{m.description}</span>
+                          </div>
+                          {selectedModel === m.id && (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5"
+                        onClick={() => generateFixMutation.mutate(discussionInput.trim() || undefined)}
+                        disabled={generateFixMutation.isPending || discussMutation.isPending}
+                        data-testid="button-generate-fix"
                       >
-                        <div className="flex flex-col">
-                          <span className="text-xs font-medium">{m.label}</span>
-                          <span className="text-[10px] text-muted-foreground">{m.description}</span>
-                        </div>
-                        {selectedModel === m.id && (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                        {generateFixMutation.isPending ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <GitPullRequest className="w-3 h-3" />
                         )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                        {generateFixMutation.isPending ? "Generating..." : "Generate Fix"}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p className="text-xs">AI generates code changes and you can push them as a PR</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
                 <span className="text-[9px] text-muted-foreground/40">Enter to send</span>
               </div>
             </div>
