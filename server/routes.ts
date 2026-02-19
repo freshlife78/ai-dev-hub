@@ -386,6 +386,37 @@ export async function registerRoutes(
     }
   });
 
+  // Bulk-link tasks: link all provided task IDs to each other bidirectionally
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-link", async (req, res) => {
+    const { taskIds } = req.body;
+    if (!Array.isArray(taskIds) || taskIds.length < 2) {
+      return res.status(400).json({ message: "At least 2 task IDs are required" });
+    }
+
+    const tasks = await storage.getTasks(req.params.projectId);
+    const validIds = new Set(tasks.map(t => t.id));
+    const filtered = taskIds.filter((id: string) => validIds.has(id));
+    if (filtered.length < 2) return res.status(400).json({ message: "At least 2 valid task IDs required" });
+
+    let updated = 0;
+    for (const id of filtered) {
+      const task = tasks.find(t => t.id === id);
+      if (!task) continue;
+      const existing = new Set(task.dependencies || []);
+      const newDeps = filtered.filter((d: string) => d !== id);
+      let changed = false;
+      for (const dep of newDeps) {
+        if (!existing.has(dep)) { existing.add(dep); changed = true; }
+      }
+      if (changed) {
+        await storage.updateTask(req.params.projectId, id, { dependencies: Array.from(existing) });
+        updated++;
+      }
+    }
+
+    res.json({ linked: filtered.length, updated });
+  });
+
   app.post("/api/businesses/:bizId/projects/:projectId/tasks", async (req, res) => {
     try {
       const project = await storage.getProject(req.params.bizId, req.params.projectId);
@@ -429,46 +460,6 @@ export async function registerRoutes(
     res.json({ task, fromProject: fromProject.name, toProject: toProject.name });
   });
 
-  app.patch("/api/businesses/:bizId/projects/:projectId/bulk-update-repository", async (req, res) => {
-    const project = await storage.getProject(req.params.bizId, req.params.projectId);
-    if (!project) return res.status(404).json({ message: "Project not found" });
-    const { repositoryId, onlyUnlinked } = req.body;
-    if (!repositoryId) return res.status(400).json({ message: "repositoryId is required" });
-    const count = await storage.bulkUpdateTasksRepository(req.params.projectId, repositoryId, !!onlyUnlinked);
-    res.json({ updated: count });
-  });
-
-  // Bulk-link tasks: link all provided task IDs to each other bidirectionally
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-link", async (req, res) => {
-    const { taskIds } = req.body;
-    if (!Array.isArray(taskIds) || taskIds.length < 2) {
-      return res.status(400).json({ message: "At least 2 task IDs are required" });
-    }
-
-    const tasks = await storage.getTasks(req.params.projectId);
-    const validIds = new Set(tasks.map(t => t.id));
-    const filtered = taskIds.filter((id: string) => validIds.has(id));
-    if (filtered.length < 2) return res.status(400).json({ message: "At least 2 valid task IDs required" });
-
-    let updated = 0;
-    for (const id of filtered) {
-      const task = tasks.find(t => t.id === id);
-      if (!task) continue;
-      const existing = new Set(task.dependencies || []);
-      const newDeps = filtered.filter((d: string) => d !== id);
-      let changed = false;
-      for (const dep of newDeps) {
-        if (!existing.has(dep)) { existing.add(dep); changed = true; }
-      }
-      if (changed) {
-        await storage.updateTask(req.params.projectId, id, { dependencies: Array.from(existing) });
-        updated++;
-      }
-    }
-
-    res.json({ linked: filtered.length, updated });
-  });
-
   // Unlink a specific dependency from a task
   app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/unlink", async (req, res) => {
     const { dependencyId } = req.body;
@@ -486,6 +477,15 @@ export async function registerRoutes(
     }
 
     res.json(updated);
+  });
+
+  app.patch("/api/businesses/:bizId/projects/:projectId/bulk-update-repository", async (req, res) => {
+    const project = await storage.getProject(req.params.bizId, req.params.projectId);
+    if (!project) return res.status(404).json({ message: "Project not found" });
+    const { repositoryId, onlyUnlinked } = req.body;
+    if (!repositoryId) return res.status(400).json({ message: "repositoryId is required" });
+    const count = await storage.bulkUpdateTasksRepository(req.params.projectId, repositoryId, !!onlyUnlinked);
+    res.json({ updated: count });
   });
 
   app.get("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/reviews", async (req, res) => {
