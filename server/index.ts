@@ -74,6 +74,10 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Auto-migrate database schema for new columns
+  const { ensureSchemaUpToDate } = await import("./db");
+  await ensureSchemaUpToDate();
+
   await registerRoutes(httpServer, app);
 
   log(`ANTHROPIC_API_KEY loaded: ${!!process.env.ANTHROPIC_API_KEY}`);
