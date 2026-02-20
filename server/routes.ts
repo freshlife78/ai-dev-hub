@@ -1067,6 +1067,19 @@ Example of the tone to aim for:
       }
     }
 
+    // If no explicit files loaded, detect file paths from task text and discussion
+    if (filePaths.size === 0) {
+      const textSources = [
+        task.description || "",
+        task.fixSteps || "",
+        task.reasoning || "",
+        ...discussion.map(m => m.content || ""),
+        instructions || "",
+      ].join("\n");
+      const detected = detectFilePathsInText(textSources);
+      for (const fp of detected) filePaths.add(fp);
+    }
+
     const headers = {
       Authorization: `token ${repo.token}`,
       Accept: "application/vnd.github.v3+json",
@@ -1093,7 +1106,10 @@ Example of the tone to aim for:
     }
 
     if (fileContents.length === 0) {
-      return res.status(400).json({ message: "Could not load any source files to generate a fix." });
+      const hint = filePaths.size > 0
+        ? `Tried to load ${filePaths.size} file(s) from GitHub but none were accessible. Check that the repository is configured and the files exist.`
+        : "No source files were identified. Try discussing the task first and mention specific file paths, or load files using the 'Refresh Files' button.";
+      return res.status(400).json({ message: hint });
     }
 
     const taskContext = `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`;
