@@ -110,6 +110,7 @@ function rowToManagerMessage(row: any): ManagerMessage {
     timestamp: row.timestamp, mode: row.mode || "chat",
     actions: row.actions || [], filesLoaded: row.filesLoaded || [],
     attachments: row.attachments || [],
+    ...(row.codeFix ? { codeFix: row.codeFix } : {}),
   };
 }
 
@@ -569,6 +570,7 @@ export class DatabaseStorage implements IStorage {
       id: full.id, businessId: bizId, sender: full.sender, content: full.content,
       timestamp: full.timestamp, mode: full.mode || "chat", actions: full.actions || [],
       filesLoaded: full.filesLoaded || [], attachments: full.attachments || [],
+      ...(full.codeFix ? { codeFix: full.codeFix } : {}),
     });
     return full;
   }
@@ -579,6 +581,7 @@ export class DatabaseStorage implements IStorage {
     const updateData: any = {};
     if (updates.actions !== undefined) updateData.actions = updates.actions;
     if (updates.content !== undefined) updateData.content = updates.content;
+    if (updates.codeFix !== undefined) updateData.codeFix = updates.codeFix;
     if (Object.keys(updateData).length > 0) {
       await db.update(managerMessagesTable).set(updateData).where(eq(managerMessagesTable.id, messageId));
     }

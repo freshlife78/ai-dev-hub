@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -48,8 +49,14 @@ import {
   Image as ImageIcon,
   FolderOutput,
   FolderOpen,
+  GitPullRequest,
+  ChevronDown,
+  ChevronRight,
+  Wrench,
+  ExternalLink,
 } from "lucide-react";
-import type { ManagerMessage, ManagerAction, ManagerAlert, ChangelogEntry } from "@shared/schema";
+import { DiffView } from "@/components/diff-view";
+import type { ManagerMessage, ManagerAction, ManagerAlert, ChangelogEntry, CodeFix, CodeFixFile } from "@shared/schema";
 
 interface ManagerData {
   messages: ManagerMessage[];
@@ -99,6 +106,7 @@ const actionTypeConfig: Record<string, { icon: typeof Inbox; label: string; colo
   CREATE_PROJECT: { icon: FolderPlus, label: "Create Project", color: "text-purple-500" },
   BULK_UPDATE_REPOSITORY: { icon: Link2, label: "Link Repository", color: "text-cyan-500" },
   MOVE_TASK: { icon: FolderOutput, label: "Move Task", color: "text-orange-500" },
+  GENERATE_CODE_FIX: { icon: Wrench, label: "Generate Code Fix", color: "text-emerald-500" },
 };
 
 function escapeHtml(text: string) {
@@ -188,6 +196,13 @@ function getActionSummary(action: ManagerAction): { title: string; details: stri
           d.reason ? `Reason: ${d.reason}` : "",
         ].filter(Boolean),
       };
+    case "GENERATE_CODE_FIX":
+      return {
+        title: `Generate Fix for ${d.taskId || "Task"}`,
+        details: [
+          d.instructions ? `${d.instructions.slice(0, 120)}${d.instructions.length > 120 ? "..." : ""}` : "",
+        ].filter(Boolean),
+      };
     default:
       return { title: "Unknown Action", details: [] };
   }
@@ -211,6 +226,18 @@ function ActionCard({
 
   const executeMutation = useMutation({
     mutationFn: async () => {
+      if (action.type === "GENERATE_CODE_FIX") {
+        const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/generate-fix`, {
+          taskId: action.data.taskId,
+          projectId: action.data.projectId,
+          instructions: action.data.instructions,
+        });
+        const data = await res.json();
+        await apiRequest("POST", `/api/businesses/${businessId}/manager/update-action-status`, {
+          messageId, actionIndex, status: "approved",
+        });
+        return data;
+      }
       const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/execute-action`, {
         actionType: action.type,
         data: action.data,
@@ -361,6 +388,125 @@ function BatchApproveBar({
   );
 }
 
+function CodeFixCard({ codeFix, businessId }: { codeFix: CodeFix; businessId: string }) {
+  const { toast } = useToast();
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [branchName, setBranchName] = useState(`ai-fix/${codeFix.taskId.toLowerCase()}`);
+  const [showPrForm, setShowPrForm] = useState(false);
+
+  const createPrMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/create-pr`, {
+        codeFixId: codeFix.id,
+        branchName,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", businessId, "manager"] });
+      toast({ title: "PR Created!", description: `PR #${data.prNumber}: ${data.prUrl}` });
+      setShowPrForm(false);
+    },
+    onError: (err: any) => {
+      let msg = err.message || "Failed to create PR";
+      try { const p = JSON.parse(msg.replace(/^\d+:\s*/, "")); if (p.message) msg = p.message; } catch {}
+      toast({ title: "PR Failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  const toggleFile = (path: string) => {
+    setExpandedFiles(prev => {
+      const next = new Set(prev);
+      next.has(path) ? next.delete(path) : next.add(path);
+      return next;
+    });
+  };
+
+  return (
+    <Card className="mt-2 overflow-hidden border-emerald-500/30 bg-emerald-500/5">
+      <div className="p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <Wrench className="w-4 h-4 text-emerald-500" />
+          <span className="text-xs font-semibold text-emerald-500">Code Fix</span>
+          <Badge variant="secondary" className="text-[9px]">{codeFix.files.length} file{codeFix.files.length !== 1 ? "s" : ""}</Badge>
+          <Badge variant="secondary" className="text-[9px] capitalize">{codeFix.status.replace("_", " ")}</Badge>
+        </div>
+
+        <div className="text-xs text-muted-foreground mb-2">{codeFix.description}</div>
+        <div className="text-[10px] font-mono text-muted-foreground/70 mb-3">
+          Commit: {codeFix.commitMessage}
+        </div>
+
+        <div className="space-y-1">
+          {codeFix.files.map((file: CodeFixFile) => (
+            <div key={file.path} className="border border-border rounded-md overflow-hidden">
+              <button
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted/50 transition-colors"
+                onClick={() => toggleFile(file.path)}
+              >
+                {expandedFiles.has(file.path) ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                <FileCode className="w-3 h-3 text-muted-foreground" />
+                <span className="text-[11px] font-mono flex-1 truncate">{file.path}</span>
+                <span className="text-[9px] text-muted-foreground">{file.description}</span>
+              </button>
+              {expandedFiles.has(file.path) && (
+                <div className="border-t border-border max-h-[300px] overflow-auto">
+                  <DiffView original={file.originalContent} modified={file.newContent} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {codeFix.status === "generated" && (
+          <div className="mt-3 pt-3 border-t border-border">
+            {!showPrForm ? (
+              <Button size="sm" onClick={() => setShowPrForm(true)} className="gap-1.5">
+                <GitPullRequest className="w-3.5 h-3.5" />
+                Create Pull Request
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={branchName}
+                  onChange={e => setBranchName(e.target.value)}
+                  placeholder="Branch name"
+                  className="text-xs h-8 flex-1 font-mono"
+                />
+                <Button size="sm" onClick={() => createPrMutation.mutate()} disabled={createPrMutation.isPending || !branchName.trim()}>
+                  {createPrMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <GitPullRequest className="w-3.5 h-3.5 mr-1.5" />}
+                  Create PR
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setShowPrForm(false)}>
+                  <X className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {codeFix.prUrl && (
+          <div className="mt-3 pt-3 border-t border-border">
+            <a
+              href={codeFix.prUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs text-emerald-500 hover:text-emerald-400 transition-colors"
+            >
+              <GitPullRequest className="w-3.5 h-3.5" />
+              PR #{codeFix.prNumber}
+              <ExternalLink className="w-3 h-3" />
+            </a>
+            {codeFix.branchName && (
+              <span className="ml-2 text-[10px] font-mono text-muted-foreground">{codeFix.branchName}</span>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function ManagerView() {
   const { selectedBusinessId } = useAppState();
   const { toast } = useToast();
@@ -424,6 +570,22 @@ export default function ManagerView() {
     },
     onError: (err: any) => {
       toast({ title: "Scan failed", description: err.message || "Could not scan repositories", variant: "destructive" });
+    },
+  });
+
+  const generateFixMutation = useMutation({
+    mutationFn: async (payload: { taskId: string; projectId: string; instructions?: string }) => {
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/manager/generate-fix`, payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "manager"] });
+      toast({ title: "Code fix generated", description: "Review the diff and create a PR when ready" });
+    },
+    onError: (err: any) => {
+      let msg = err.message || "Failed to generate fix";
+      try { const p = JSON.parse(msg.replace(/^\d+:\s*/, "")); if (p.message) msg = p.message; } catch {}
+      toast({ title: "Generation failed", description: msg, variant: "destructive" });
     },
   });
 
@@ -787,7 +949,7 @@ export default function ManagerView() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2 justify-center mt-4">
-                  {["What should I work on today?", "How is each project going?", "What's blocking us?", "Show me the code structure", "Review my inbox"].map(q => (
+                  {["What should I work on today?", "How is each project going?", "What's blocking us?", "Fix the highest priority task", "Show me the code structure", "Review my inbox"].map(q => (
                     <Button
                       key={q}
                       size="sm"
@@ -855,6 +1017,13 @@ export default function ManagerView() {
                       {new Date(msg.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     </div>
                   </div>
+
+                  {msg.sender === "manager" && (msg as any).codeFix && (
+                    <CodeFixCard
+                      codeFix={(msg as any).codeFix}
+                      businessId={selectedBusinessId}
+                    />
+                  )}
 
                   {msg.sender === "manager" && msg.actions && msg.actions.length > 0 && (
                     <div className="mt-1" data-testid={`actions-container-${msg.id}`}>

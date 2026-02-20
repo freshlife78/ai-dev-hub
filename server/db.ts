@@ -12,16 +12,28 @@ export const db = drizzle(pool, { schema });
 export async function ensureSchemaUpToDate() {
   const client = await pool.connect();
   try {
-    const cols = await client.query(
+    const taskCols = await client.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'tasks'`
     );
-    const existing = new Set(cols.rows.map((r: any) => r.column_name));
+    const taskExisting = new Set(taskCols.rows.map((r: any) => r.column_name));
 
-    if (!existing.has("dependencies")) {
+    if (!taskExisting.has("dependencies")) {
       await client.query(
         `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS dependencies jsonb NOT NULL DEFAULT '[]'::jsonb`
       );
       console.log("[db] Added missing column: tasks.dependencies");
+    }
+
+    const mgrCols = await client.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'manager_messages'`
+    );
+    const mgrExisting = new Set(mgrCols.rows.map((r: any) => r.column_name));
+
+    if (!mgrExisting.has("code_fix")) {
+      await client.query(
+        `ALTER TABLE manager_messages ADD COLUMN IF NOT EXISTS code_fix jsonb`
+      );
+      console.log("[db] Added missing column: manager_messages.code_fix");
     }
   } catch (err) {
     console.error("[db] Schema migration error:", err);

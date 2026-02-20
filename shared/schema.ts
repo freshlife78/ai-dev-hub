@@ -236,7 +236,7 @@ export const codeReviewSchema = z.object({
 
 export type CodeReview = z.infer<typeof codeReviewSchema>;
 
-export const managerActionTypeEnum = z.enum(["CREATE_INBOX_ITEM", "CREATE_TASK", "UPDATE_TASK_STATUS", "CREATE_PROJECT", "BULK_UPDATE_REPOSITORY", "MOVE_TASK"]);
+export const managerActionTypeEnum = z.enum(["CREATE_INBOX_ITEM", "CREATE_TASK", "UPDATE_TASK_STATUS", "CREATE_PROJECT", "BULK_UPDATE_REPOSITORY", "MOVE_TASK", "GENERATE_CODE_FIX"]);
 
 export const managerActionSchema = z.object({
   type: managerActionTypeEnum,
@@ -262,6 +262,7 @@ export const managerMessageSchema = z.object({
     content: z.string(),
     type: z.string(),
   })).optional().default([]),
+  codeFix: codeFixSchema.optional(),
 });
 
 export type ManagerMessage = z.infer<typeof managerMessageSchema>;
@@ -395,4 +396,5 @@ export const managerMessagesTable = pgTable("manager_messages", {
   actions: jsonb("actions").$type<ManagerAction[]>().notNull().default([]),
   filesLoaded: jsonb("files_loaded").$type<{ path: string; repo: string }[]>().notNull().default([]),
   attachments: jsonb("attachments").$type<{ name: string; content: string; type: string }[]>().notNull().default([]),
+  codeFix: jsonb("code_fix").$type<CodeFix>(),
 });
