@@ -46,7 +46,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { GitHubFile, Task, Project, RepositorySafe } from "@shared/schema";
-import { queryClient, apiRequest } from "@/lib/queryClient";
+import { queryClient, apiRequest, safeJsonParse } from "@/lib/queryClient";
 import ReactMarkdown from "react-markdown";
 
 interface ExtractedTask {
@@ -221,7 +221,7 @@ export default function FilesView() {
       const taskGroup = allTasks.find((g) => g.tasks.some((t) => t.id === reviewSourceTaskId));
       if (!taskGroup) throw new Error("Could not find the task's project");
       const res = await apiRequest("POST", `/api/businesses/${bizId}/projects/${taskGroup.project.id}/tasks/${reviewSourceTaskId}/generate-fix-prompt`, params);
-      return res.json();
+      return safeJsonParse(res);
     },
     onSuccess: (data) => {
       setGeneratedFixPrompt(data.prompt);

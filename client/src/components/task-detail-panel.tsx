@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, safeJsonParse } from "@/lib/queryClient";
 import { useAppState } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -195,7 +195,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
         model: selectedModel,
         instructions,
       });
-      return await res.json();
+      return await safeJsonParse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"] });

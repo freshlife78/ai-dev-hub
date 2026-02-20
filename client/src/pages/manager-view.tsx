@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, safeJsonParse } from "@/lib/queryClient";
 import { useAppState } from "@/lib/store";
 import { useToast } from "@/hooks/use-toast";
 import DOMPurify from "dompurify";
@@ -234,7 +234,7 @@ function ActionCard({
           projectId: action.data.projectId,
           instructions: action.data.instructions,
         });
-        const data = await res.json();
+        const data = await safeJsonParse(res);
         await apiRequest("POST", `/api/businesses/${businessId}/manager/update-action-status`, {
           messageId, actionIndex, status: "approved",
         });
@@ -585,7 +585,7 @@ export default function ManagerView() {
   const generateFixMutation = useMutation({
     mutationFn: async (payload: { taskId: string; projectId: string; instructions?: string }) => {
       const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/manager/generate-fix`, payload);
-      return res.json();
+      return safeJsonParse(res);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "manager"] });
