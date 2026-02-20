@@ -923,7 +923,10 @@ When responding in this task discussion:
 - Explain tradeoffs and options when relevant, don't just dictate requirements
 - Use markdown for code snippets when helpful, but keep prose natural
 - The user can mention file paths in their messages and those files will be automatically loaded for you. If you need to see a file that hasn't been loaded, ask the user to mention it by its full path.
-- If the user asks you to change the task status (e.g. "mark as done", "set to Done", "change to In Progress"), include this exact line at the END of your response: ACTION:UPDATE_STATUS\n{"newStatus":"Done"} (use Done, In Progress, Quality Review, or Open as appropriate). Only include this when the user explicitly requests a status change and you are fulfilling it. Your normal text response can say "Done! I've marked it as complete." or similar before the action line.
+- If the user asks you to change the task status (e.g. "mark as done", "set to Done", "change to In Progress"), include this EXACT plain text (no markdown, no code blocks, no backticks) on its own line at the very END of your response:
+ACTION:UPDATE_STATUS
+{"newStatus":"Done"}
+Replace "Done" with the appropriate status: Done, In Progress, Quality Review, or Open. IMPORTANT: Do NOT wrap this in markdown code blocks or backticks - it must be plain text so the system can parse it. Only include this when the user explicitly requests a status change.
 
 Example of the tone to aim for:
 "Good news — the notifications screen is built and working! The only thing left is the tab navigation isn't wired up yet. Once you add the tab to _layout.tsx, users will be able to access it. Want me to generate the fix prompt for that?"`;
@@ -948,8 +951,12 @@ Example of the tone to aim for:
         .join("");
 
       // Parse and execute ACTION:UPDATE_STATUS if present
+      // Strip markdown code fences and backticks before matching
       let statusUpdated = false;
-      const statusActionMatch = responseText.match(/ACTION:UPDATE_STATUS\s*\n\s*(\{[^}]+\})/);
+      let cleanedForParsing = responseText
+        .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, ""))
+        .replace(/`([^`]+)`/g, "$1");
+      const statusActionMatch = cleanedForParsing.match(/ACTION:UPDATE_STATUS\s*[\n\r]+\s*(\{[^}]+\})/);
       if (statusActionMatch) {
         try {
           const parsed = JSON.parse(statusActionMatch[1]);
@@ -962,7 +969,14 @@ Example of the tone to aim for:
               bizId
             );
             statusUpdated = true;
-            responseText = responseText.replace(/ACTION:UPDATE_STATUS\s*\n\s*\{[^}]+\}/g, "").trim();
+            // Remove the action from the displayed response (including any surrounding code fences)
+            responseText = responseText
+              .replace(/```\s*\n?\s*ACTION:UPDATE_STATUS\s*\n?\s*```/g, "")
+              .replace(/```\s*\n?\s*\{"newStatus"\s*:\s*"[^"]+"\}\s*\n?\s*```/g, "")
+              .replace(/`ACTION:UPDATE_STATUS`/g, "")
+              .replace(/`\{"newStatus"\s*:\s*"[^"]+"\}`/g, "")
+              .replace(/ACTION:UPDATE_STATUS\s*[\n\r]+\s*\{[^}]+\}/g, "")
+              .trim();
           }
         } catch {}
       }
