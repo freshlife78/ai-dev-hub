@@ -2151,11 +2151,12 @@ RULES:
 - For MOVE_TASK, use ONLY actual task IDs and real project IDs from the AVAILABLE lists. Include fromProjectId (the task's current project) and toProjectId (the destination project). Always provide the reason for moving.
 - For GENERATE_CODE_FIX, include the task's actual taskId, its projectId, and detailed instructions about what code change to make. Use this when the user asks you to fix, implement, or change code for a specific task.
 
-CRITICAL - CODE GENERATION RULE:
-When the user asks you to "generate a fix", "implement", "deploy", "write code", "create the code", or anything that involves making actual code changes for a task, you MUST use the ACTION:GENERATE_CODE_FIX action. Do NOT write code blocks in your response. Do NOT provide copy-paste instructions. Instead, propose the GENERATE_CODE_FIX action which will read the actual repository files, generate real diffs, and allow the user to create a Pull Request. This is the ONLY way to actually make code changes. Writing code in chat does nothing — only the GENERATE_CODE_FIX action creates real changes.
-- Keep your text response brief (1-3 sentences explaining what will be generated)
-- Then append the ACTION:GENERATE_CODE_FIX with detailed instructions in the "instructions" field
-- If multiple tasks need fixes, propose multiple GENERATE_CODE_FIX actions`;
+CRITICAL - CODE GENERATION RULE (HIGHEST PRIORITY):
+You MUST NEVER write code blocks (\`\`\`) in your responses. You CANNOT write code. You do not have that ability. The ONLY way to create code changes is through the ACTION:GENERATE_CODE_FIX action. When the user asks you to generate, fix, implement, deploy, build, create, or write anything code-related:
+1. Write 1-3 SHORT sentences explaining what you will generate
+2. Append ACTION:GENERATE_CODE_FIX with detailed instructions
+3. STOP. Do not write any code. No typescript, no sql, no bash, no json code blocks. NONE.
+If you write code blocks in your response, the user will see useless text they cannot execute. Only ACTION:GENERATE_CODE_FIX creates real files and Pull Requests.`;
 
     const projectList = allProjectData.map(p => `  ${p.project.id}: ${p.project.name}${p.project.defaultRepositoryId ? ` (default repo: ${p.project.defaultRepositoryId})` : ""}`).join("\n");
     const repoList = (await storage.getRepositories(bizId)).map(r => `  ${r.id}: ${r.name} (${r.type})`).join("\n");
@@ -2174,11 +2175,20 @@ When the user asks you to "generate a fix", "implement", "deploy", "write code",
       const projectFocusInstructions = projectFocusId
         ? `\n\nPROJECT FOCUS: The user is currently focused on a specific project. You have DEEP CONTEXT about every task in this project — their descriptions, statuses, priorities, fix steps, dependencies, and analysis results. Use this to answer questions like "has X been considered?", "what's the status of Y?", "are we missing anything for Z?". Reference specific task IDs when relevant. If the user asks about something not covered by any task, suggest creating one.`
         : "";
-      systemPrompt = `You are the AI Business Manager for ${biz.name}. You have complete visibility into all projects, tasks, code, and activity for this business. Your role is to:\n- Help prioritize work based on business impact and urgency\n- Identify blockers and risks before they become problems\n- Suggest what to work on next\n- Generate status reports and summaries\n- Connect dots between different projects and tasks\n- Flag when tasks have been stuck too long\n- Identify dependencies between tasks\n- Take action by creating tasks, inbox items, or updating task statuses when asked\n- Review code and file structure from connected repositories\n- Generate code fixes for tasks and create pull requests when asked to implement changes — ALWAYS use ACTION:GENERATE_CODE_FIX instead of writing code in chat. Code in chat is useless; only the action creates real changes.\n\nBe proactive, concise, and actionable. Always explain your reasoning. When suggesting priorities, consider: production impact, dependencies, team velocity, and business goals.\n\nYou have memory of this conversation. Reference previous messages when relevant.${projectFocusInstructions}${fileAccessInfo}${actionInstructions}${projectRef}\n\n${fullContext}`;
+      systemPrompt = `You are the AI Business Manager for ${biz.name}. You have complete visibility into all projects, tasks, code, and activity for this business.
+
+ABSOLUTE RULE: You MUST NEVER include code blocks (\`\`\`), code snippets, SQL, TypeScript, or any programming code in your responses. You CANNOT write code — you can only propose ACTION:GENERATE_CODE_FIX which will generate code through the system. If asked to implement, fix, generate, build, create, or deploy code, respond with 1-3 sentences and append the GENERATE_CODE_FIX action. NEVER provide copy-paste code instructions.
+
+Your role is to:\n- Help prioritize work based on business impact and urgency\n- Identify blockers and risks before they become problems\n- Suggest what to work on next\n- Generate status reports and summaries\n- Connect dots between different projects and tasks\n- Flag when tasks have been stuck too long\n- Identify dependencies between tasks\n- Take action by creating tasks, inbox items, or updating task statuses when asked\n- Review code and file structure from connected repositories\n- Generate code fixes by using ACTION:GENERATE_CODE_FIX — the ONLY way to make real code changes\n\nBe proactive, concise, and actionable. Always explain your reasoning. When suggesting priorities, consider: production impact, dependencies, team velocity, and business goals.\n\nYou have memory of this conversation. Reference previous messages when relevant.${projectFocusInstructions}${fileAccessInfo}${actionInstructions}${projectRef}\n\n${fullContext}`;
       if (!message || typeof message !== "string") {
         return res.status(400).json({ message: "message is required" });
       }
-      userPrompt = message;
+      const codeKeywords = /\b(generate|fix|implement|deploy|build|create|write|code|schema|migration|endpoint|route|component|api)\b/i;
+      if (codeKeywords.test(message)) {
+        userPrompt = message + "\n\n[SYSTEM REMINDER: Do NOT write code in your response. Use ACTION:GENERATE_CODE_FIX to produce real code changes. Keep your text brief and append the action.]";
+      } else {
+        userPrompt = message;
+      }
     }
 
     if (chatMode === "chat") {
@@ -2502,7 +2512,7 @@ When the user asks you to "generate a fix", "implement", "deploy", "write code",
         return res.status(400).json({ message: "No GitHub repository configured." });
       }
 
-      // Gather files from task context
+      // Gather files from task context, instructions, and description
       const filePaths = new Set<string>();
       if (task.filePath) filePaths.add(task.filePath);
       const discussion = await storage.getDiscussion(projectId, taskId);
@@ -2510,11 +2520,49 @@ When the user asks you to "generate a fix", "implement", "deploy", "write code",
         if (msg.filesLoaded) for (const f of msg.filesLoaded) filePaths.add(f);
       }
 
+      // Extract file paths mentioned in instructions, description, or fixSteps
+      const allText = [instructions || "", task.description || "", task.fixSteps || ""].join(" ");
+      const filePathPattern = /(?:^|\s|["'`(])([a-zA-Z0-9_\-./]+\.[a-zA-Z]{1,10})(?:\s|["'`),;:]|$)/g;
+      let pathMatch;
+      while ((pathMatch = filePathPattern.exec(allText)) !== null) {
+        const candidate = pathMatch[1].replace(/^[./]+/, "");
+        if (candidate.includes("/") || candidate.match(/\.(ts|tsx|js|jsx|py|sql|json|css|html|go|rs|java)$/)) {
+          filePaths.add(candidate);
+        }
+      }
+
       const headers = {
         Authorization: `token ${repo.token}`,
         Accept: "application/vnd.github.v3+json",
         "User-Agent": "AI-Dev-Hub",
       };
+
+      // If no files found yet, try to fetch the repo tree to give AI context
+      let repoTree: string[] = [];
+      if (filePaths.size === 0) {
+        try {
+          const treeRes = await fetch(
+            `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/HEAD?recursive=1`,
+            { headers }
+          );
+          if (treeRes.ok) {
+            const treeData = await treeRes.json();
+            repoTree = (treeData.tree || [])
+              .filter((t: any) => t.type === "blob")
+              .map((t: any) => t.path)
+              .slice(0, 200);
+
+            // Auto-detect likely schema/config files
+            const schemaKeywords = ["schema", "model", "database", "migration", "db", "package.json"];
+            for (const treePath of repoTree) {
+              if (schemaKeywords.some(kw => treePath.toLowerCase().includes(kw)) && !treePath.includes("node_modules")) {
+                filePaths.add(treePath);
+                if (filePaths.size >= 8) break;
+              }
+            }
+          }
+        } catch {}
+      }
 
       const fileContents: { path: string; content: string; sha: string }[] = [];
       for (const fp of Array.from(filePaths)) {
@@ -2534,10 +2582,6 @@ When the user asks you to "generate a fix", "implement", "deploy", "write code",
         } catch {}
       }
 
-      if (fileContents.length === 0) {
-        return res.status(400).json({ message: "Could not load source files. Make sure the task has a file path set." });
-      }
-
       // Build context with linked tasks
       let depContext = "";
       if (task.dependencies && task.dependencies.length > 0) {
@@ -2554,14 +2598,19 @@ When the user asks you to "generate a fix", "implement", "deploy", "write code",
       }
 
       const taskContext = `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`;
-      const filesContext = fileContents.map(f =>
-        `FILE: ${f.path}\n\`\`\`\n${f.content.length > 12000 ? f.content.slice(0, 12000) + "\n[truncated]" : f.content}\n\`\`\``
-      ).join("\n\n");
+      const filesContext = fileContents.length > 0
+        ? fileContents.map(f =>
+            `FILE: ${f.path}\n\`\`\`\n${f.content.length > 12000 ? f.content.slice(0, 12000) + "\n[truncated]" : f.content}\n\`\`\``
+          ).join("\n\n")
+        : "No source files loaded. You are creating NEW files.";
+      const treeContext = repoTree.length > 0
+        ? `\nREPOSITORY FILE STRUCTURE:\n${repoTree.join("\n")}`
+        : "";
 
       const systemPrompt = `You are an expert software developer. Generate a precise code fix for the given task.
 
 ${taskContext}${depContext}
-
+${treeContext}
 SOURCE FILES:
 ${filesContext}
 
@@ -2582,9 +2631,12 @@ You MUST respond with ONLY a valid JSON object (no markdown, no backticks, no ex
 
 Rules:
 - Include the COMPLETE file content in newContent, not just the changed lines
-- Only include files that actually need changes
+- For existing files (shown in SOURCE FILES), include the full modified content
+- For NEW files, use the correct path based on the repository structure and include full file content
+- Only include files that actually need changes or need to be created
 - Make minimal, focused changes
-- The commit message should be concise and descriptive`;
+- The commit message should be concise and descriptive
+- Use the repository file structure to determine correct paths for new files`;
 
       const anthropic = new Anthropic({ apiKey });
       const aiMsg = await anthropic.messages.create({
