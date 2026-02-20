@@ -2570,9 +2570,10 @@ RULES:
     res.flushHeaders();
 
     const { runAgentLoop } = await import("./agentLoop");
+    const { executeCommitAndPush } = await import("./agentTools");
 
     try {
-      const result = await runAgentLoop({
+      let result = await runAgentLoop({
         apiKey,
         repo: { owner: repo.owner, repo: repo.repo, token: repo.token },
         systemPrompt,
@@ -2582,6 +2583,30 @@ RULES:
           res.write(`data: ${JSON.stringify(step)}\n\n`);
         },
       });
+
+      // Fallback: agent stopped without deploying — auto-push staged files to main
+      if (
+        result.pendingWrites.length > 0 &&
+        !result.prUrl &&
+        !result.pushSha
+      ) {
+        res.write(`data: ${JSON.stringify({ type: "thinking", content: "Agent stopped without deploying. Auto-pushing staged files to main..." })}\n\n`);
+        try {
+          const pushResult = await executeCommitAndPush(
+            { owner: repo.owner, repo: repo.repo, token: repo.token },
+            result.pendingWrites,
+            `[${task.id}] ${task.title}`,
+          );
+          result = { ...result, pushSha: pushResult.sha };
+          res.write(`data: ${JSON.stringify({
+            type: "pr_created",
+            content: `Pushed ${pushResult.filesCommitted} file(s) to main. Commit: ${pushResult.sha.slice(0, 7)}`,
+            branchName: `main (${pushResult.sha.slice(0, 7)})`,
+          })}\n\n`);
+        } catch (pushErr: any) {
+          res.write(`data: ${JSON.stringify({ type: "error", content: `Auto-push failed: ${pushErr.message}` })}\n\n`);
+        }
+      }
 
       // Save a summary message to manager history
       const filesChanged = result.pendingWrites.map(f => f.path);
