@@ -2488,11 +2488,23 @@ Your role is to:\n- Help prioritize work based on business impact and urgency\n-
     const { taskId, projectId, instructions, deployMode } = req.body;
     const mode = deployMode === "pr" ? "pr" : "push";
 
-    if (!taskId || !projectId) {
-      return res.status(400).json({ message: "taskId and projectId are required" });
+    if (!taskId) {
+      return res.status(400).json({ message: "taskId is required" });
     }
 
-    const task = await storage.getTask(projectId, taskId);
+    let task = projectId ? await storage.getTask(projectId, taskId) : undefined;
+    let resolvedProjectId = projectId;
+    if (!task) {
+      const allGroups = await storage.getAllTasksForBusiness(bizId);
+      for (const group of allGroups) {
+        const found = group.tasks.find(t => t.id === taskId);
+        if (found) {
+          task = found;
+          resolvedProjectId = group.project.id;
+          break;
+        }
+      }
+    }
     if (!task) return res.status(404).json({ message: "Task not found" });
 
     const reviewAgent = await storage.getReviewAgent(bizId);
@@ -2505,7 +2517,7 @@ Your role is to:\n- Help prioritize work based on business impact and urgency\n-
     if (!repo) {
       const bizRepos = await storage.getRepositoriesWithTokens(bizId);
       if (bizRepos.length >= 1) {
-        const project = await storage.getProject(bizId, projectId);
+        const project = await storage.getProject(bizId, resolvedProjectId);
         repo = (project?.defaultRepositoryId
           ? bizRepos.find((r: any) => r.id === project.defaultRepositoryId)
           : null) || bizRepos[0];
@@ -2643,9 +2655,21 @@ RULES:
     try {
       const bizId = req.params.bizId;
       const { taskId, projectId, instructions } = req.body;
-      if (!taskId || !projectId) return res.status(400).json({ message: "taskId and projectId are required" });
+      if (!taskId) return res.status(400).json({ message: "taskId is required" });
 
-      const task = await storage.getTask(projectId, taskId);
+      let task = projectId ? await storage.getTask(projectId, taskId) : undefined;
+      let resolvedProjectId = projectId;
+      if (!task) {
+        const allGroups = await storage.getAllTasksForBusiness(bizId);
+        for (const group of allGroups) {
+          const found = group.tasks.find(t => t.id === taskId);
+          if (found) {
+            task = found;
+            resolvedProjectId = group.project.id;
+            break;
+          }
+        }
+      }
       if (!task) return res.status(404).json({ message: "Task not found" });
 
       const reviewAgent = await storage.getReviewAgent(bizId);
@@ -2658,7 +2682,7 @@ RULES:
       if (!repo) {
         const bizRepos = await storage.getRepositoriesWithTokens(bizId);
         if (bizRepos.length >= 1) {
-          const project = await storage.getProject(bizId, projectId);
+          const project = await storage.getProject(bizId, resolvedProjectId);
           repo = (project?.defaultRepositoryId
             ? bizRepos.find(r => r.id === project.defaultRepositoryId)
             : null) || bizRepos[0];
@@ -2671,7 +2695,7 @@ RULES:
       // Gather files from task context, instructions, and description
       const filePaths = new Set<string>();
       if (task.filePath) filePaths.add(task.filePath);
-      const discussion = await storage.getDiscussion(projectId, taskId);
+      const discussion = await storage.getDiscussion(resolvedProjectId, taskId);
       for (const msg of discussion) {
         if (msg.filesLoaded) for (const f of msg.filesLoaded) filePaths.add(f);
       }
