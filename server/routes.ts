@@ -2767,7 +2767,7 @@ RULES:
       if (task.dependencies && task.dependencies.length > 0) {
         const depTasks = [];
         for (const depId of task.dependencies) {
-          const dt = await storage.getTask(projectId, depId);
+          const dt = await storage.getTask(resolvedProjectId, depId);
           if (dt) depTasks.push(dt);
         }
         if (depTasks.length > 0) {

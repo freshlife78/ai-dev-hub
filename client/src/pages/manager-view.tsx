@@ -225,20 +225,40 @@ function ActionCard({
   const cfg = actionTypeConfig[action.type] || actionTypeConfig.CREATE_INBOX_ITEM;
   const Icon = cfg.icon;
   const summary = getActionSummary(action);
+  const [codeFixProgress, setCodeFixProgress] = useState<string | null>(null);
 
   const executeMutation = useMutation({
     mutationFn: async () => {
       if (action.type === "GENERATE_CODE_FIX") {
-        const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/generate-fix`, {
-          taskId: action.data.taskId,
-          projectId: action.data.projectId,
-          instructions: action.data.instructions,
-        });
-        const data = await safeJsonParse(res);
-        await apiRequest("POST", `/api/businesses/${businessId}/manager/update-action-status`, {
-          messageId, actionIndex, status: "approved",
-        });
-        return data;
+        setCodeFixProgress("Fetching code from repository...");
+        const progressTimer = setTimeout(() => {
+          setCodeFixProgress("Analyzing code and generating fix...");
+        }, 5000);
+        const progressTimer2 = setTimeout(() => {
+          setCodeFixProgress("AI is writing the code fix... almost there");
+        }, 25000);
+        try {
+          const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/generate-fix`, {
+            taskId: action.data.taskId,
+            projectId: action.data.projectId,
+            instructions: action.data.instructions,
+          });
+          clearTimeout(progressTimer);
+          clearTimeout(progressTimer2);
+          setCodeFixProgress("Processing response...");
+          const data = await safeJsonParse(res);
+          setCodeFixProgress("Finalizing...");
+          await apiRequest("POST", `/api/businesses/${businessId}/manager/update-action-status`, {
+            messageId, actionIndex, status: "approved",
+          });
+          setCodeFixProgress(null);
+          return data;
+        } catch (err) {
+          clearTimeout(progressTimer);
+          clearTimeout(progressTimer2);
+          setCodeFixProgress(null);
+          throw err;
+        }
       }
       const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/execute-action`, {
         actionType: action.type,
@@ -253,9 +273,14 @@ function ActionCard({
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", businessId, "inbox"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", businessId, "projects"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", businessId, "tasks"] });
-      toast({ title: "Action completed", description: `${cfg.label} successful` });
+      if (action.type === "GENERATE_CODE_FIX") {
+        toast({ title: "Code fix generated", description: "The AI-generated code fix is ready for review below." });
+      } else {
+        toast({ title: "Action completed", description: `${cfg.label} successful` });
+      }
     },
     onError: (err: any) => {
+      setCodeFixProgress(null);
       let msg = err.message || "Failed to execute action";
       try {
         const cleaned = msg.replace(/^\d+:\s*/, "");
@@ -309,26 +334,36 @@ function ActionCard({
       </div>
 
       {isPending && (
-        <div className="flex items-center gap-2 mt-2.5 pt-2 border-t border-border">
-          <Button
-            size="sm"
-            onClick={() => executeMutation.mutate()}
-            disabled={executeMutation.isPending || cancelMutation.isPending}
-            data-testid={`button-approve-action-${actionIndex}`}
-          >
-            {executeMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-1.5" />}
-            Approve
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => cancelMutation.mutate()}
-            disabled={cancelMutation.isPending || executeMutation.isPending}
-            data-testid={`button-cancel-action-${actionIndex}`}
-          >
-            <X className="w-3.5 h-3.5 mr-1.5" />
-            Cancel
-          </Button>
+        <div className="mt-2.5 pt-2 border-t border-border">
+          {executeMutation.isPending && codeFixProgress ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" />
+              <span>{codeFixProgress}</span>
+              <span className="text-[10px] text-muted-foreground/60">(this may take up to a minute)</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => executeMutation.mutate()}
+                disabled={executeMutation.isPending || cancelMutation.isPending}
+                data-testid={`button-approve-action-${actionIndex}`}
+              >
+                {executeMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Check className="w-3.5 h-3.5 mr-1.5" />}
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => cancelMutation.mutate()}
+                disabled={cancelMutation.isPending || executeMutation.isPending}
+                data-testid={`button-cancel-action-${actionIndex}`}
+              >
+                <X className="w-3.5 h-3.5 mr-1.5" />
+                Cancel
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </Card>
