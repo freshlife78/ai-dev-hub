@@ -160,10 +160,14 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
       const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/discuss`, payload);
       return await res.json();
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (data: { messages?: unknown[]; statusUpdated?: boolean }, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+      if (data?.statusUpdated) {
+        queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "changelog"] });
+        toast({ title: "Status updated", description: "Task status has been changed." });
+      }
       setDiscussionInput("");
       setAutoAnalysisError(null);
       if (variables.isAutoAnalysis) {

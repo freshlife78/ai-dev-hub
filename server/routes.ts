@@ -923,6 +923,7 @@ When responding in this task discussion:
 - Explain tradeoffs and options when relevant, don't just dictate requirements
 - Use markdown for code snippets when helpful, but keep prose natural
 - The user can mention file paths in their messages and those files will be automatically loaded for you. If you need to see a file that hasn't been loaded, ask the user to mention it by its full path.
+- If the user asks you to change the task status (e.g. "mark as done", "set to Done", "change to In Progress"), include this exact line at the END of your response: ACTION:UPDATE_STATUS\n{"newStatus":"Done"} (use Done, In Progress, Quality Review, or Open as appropriate). Only include this when the user explicitly requests a status change and you are fulfilling it. Your normal text response can say "Done! I've marked it as complete." or similar before the action line.
 
 Example of the tone to aim for:
 "Good news — the notifications screen is built and working! The only thing left is the tab navigation isn't wired up yet. Once you add the tab to _layout.tsx, users will be able to access it. Want me to generate the fix prompt for that?"`;
@@ -941,10 +942,30 @@ Example of the tone to aim for:
         ],
       });
 
-      const responseText = aiMsg.content
+      let responseText = aiMsg.content
         .filter((block): block is Anthropic.TextBlock => block.type === "text")
         .map((block) => block.text)
         .join("");
+
+      // Parse and execute ACTION:UPDATE_STATUS if present
+      let statusUpdated = false;
+      const statusActionMatch = responseText.match(/ACTION:UPDATE_STATUS\s*\n\s*(\{[^}]+\})/);
+      if (statusActionMatch) {
+        try {
+          const parsed = JSON.parse(statusActionMatch[1]);
+          const newStatus = parsed.newStatus;
+          if (["Open", "In Progress", "Quality Review", "Done"].includes(newStatus)) {
+            await storage.updateTask(
+              req.params.projectId,
+              req.params.taskId,
+              { status: newStatus } as any,
+              bizId
+            );
+            statusUpdated = true;
+            responseText = responseText.replace(/ACTION:UPDATE_STATUS\s*\n\s*\{[^}]+\}/g, "").trim();
+          }
+        } catch {}
+      }
 
       await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
         sender: "claude",
@@ -972,7 +993,7 @@ Example of the tone to aim for:
       }
 
       const allMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
-      res.json({ messages: allMessages, filesLoaded: loadedFilePaths });
+      res.json({ messages: allMessages, filesLoaded: loadedFilePaths, statusUpdated });
     } catch (err: any) {
       console.error("[discuss] Error:", err);
       let errorMsg = err.message || "Unknown error";
