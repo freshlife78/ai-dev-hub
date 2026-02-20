@@ -1183,12 +1183,27 @@ Rules:
         .map((block) => block.text)
         .join("");
 
+      const wasTruncated = aiMsg.stop_reason === "max_tokens";
+
       let parsed: any;
       try {
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+        let cleanedText = responseText
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
+
+        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? jsonMatch[0] : cleanedText;
+        parsed = JSON.parse(jsonStr);
       } catch {
-        return res.status(500).json({ message: "AI did not return valid JSON. Try again." });
+        if (wasTruncated) {
+          return res.status(500).json({
+            message: "The code fix was too large and got cut off. Try selecting fewer files or giving more specific instructions to narrow the changes.",
+          });
+        }
+        return res.status(500).json({
+          message: "AI did not return valid JSON. Try again — sometimes rephrasing the instructions helps.",
+        });
       }
 
       const fixId = `fix-${crypto.randomUUID().slice(0, 8)}`;
@@ -2872,7 +2887,7 @@ Rules:
       const anthropic = new Anthropic({ apiKey });
       const aiMsg = await anthropic.messages.create({
         model: "claude-sonnet-4-5-20250929",
-        max_tokens: 8192,
+        max_tokens: 16384,
         messages: [{ role: "user", content: "Generate the code fix now. Respond with ONLY the JSON object." }],
         system: systemPrompt,
       });
@@ -2882,12 +2897,27 @@ Rules:
         .map((block) => block.text)
         .join("");
 
+      const wasTruncated = aiMsg.stop_reason === "max_tokens";
+
       let parsed: any;
       try {
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-        parsed = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+        let cleanedText = responseText
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
+
+        const jsonMatch = cleanedText.match(/\{[\s\S]*\}/);
+        const jsonStr = jsonMatch ? jsonMatch[0] : cleanedText;
+        parsed = JSON.parse(jsonStr);
       } catch {
-        return res.status(500).json({ message: "AI did not return valid JSON. Try again." });
+        if (wasTruncated) {
+          return res.status(500).json({
+            message: "The code fix was too large and got cut off. Try selecting fewer files or giving more specific instructions to narrow the changes.",
+          });
+        }
+        return res.status(500).json({
+          message: "AI did not return valid JSON. Try again — sometimes rephrasing the instructions helps.",
+        });
       }
 
       const fixId = `fix-${crypto.randomUUID().slice(0, 8)}`;
