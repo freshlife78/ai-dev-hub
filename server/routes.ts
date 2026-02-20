@@ -2485,7 +2485,8 @@ Your role is to:\n- Help prioritize work based on business impact and urgency\n-
   // Agent loop: streams steps via SSE as the AI reads, writes, and creates PRs
   app.post("/api/businesses/:bizId/manager/agent-run", async (req, res) => {
     const bizId = req.params.bizId;
-    const { taskId, projectId, instructions } = req.body;
+    const { taskId, projectId, instructions, deployMode } = req.body;
+    const mode = deployMode === "pr" ? "pr" : "push";
 
     if (!taskId || !projectId) {
       return res.status(400).json({ message: "taskId and projectId are required" });
@@ -2545,19 +2546,21 @@ WORKFLOW:
 1. First, use list_directory and read_file to explore the codebase and understand the existing patterns, structure, and conventions
 2. Plan your changes
 3. Use write_file for each file you need to create or modify (provide COMPLETE file content)
-4. When all files are ready, use create_pull_request to submit your changes
+4. When all files are ready, use ${mode === "push" ? "commit_and_push to push directly to main" : "create_pull_request to submit your changes"}
 5. Keep your thinking concise — explain what you're doing and why
+
+CRITICAL: You MUST call ${mode === "push" ? "commit_and_push" : "create_pull_request"} when you are done writing files. Do NOT stop without deploying your changes. After all write_file calls, immediately call ${mode === "push" ? "commit_and_push" : "create_pull_request"}.
 
 RULES:
 - Follow the existing code style and patterns in the repo
 - Write production-quality code
 - Include all necessary imports and dependencies
 - Test your logic mentally before writing
-- Create a clear, descriptive PR`;
+- ${mode === "push" ? "Push directly to main with a clear commit message" : "Create a clear, descriptive PR"}`;
 
     const userMessage = instructions
-      ? `Implement the task: ${task.title}. ${instructions}`
-      : `Implement the task: ${task.title}. Read the codebase first to understand the patterns, then make the changes and create a PR.`;
+      ? `Implement the task: ${task.title}. ${instructions}. When done, ${mode === "push" ? "commit and push directly to main" : "create a pull request"}.`
+      : `Implement the task: ${task.title}. Read the codebase first to understand the patterns, then make the changes and ${mode === "push" ? "commit and push directly to main" : "create a pull request"}.`;
 
     // SSE headers
     res.setHeader("Content-Type", "text/event-stream");
@@ -2574,6 +2577,7 @@ RULES:
         repo: { owner: repo.owner, repo: repo.repo, token: repo.token },
         systemPrompt,
         userMessage,
+        deployMode: mode,
         onStep: (step) => {
           res.write(`data: ${JSON.stringify(step)}\n\n`);
         },
@@ -2581,9 +2585,14 @@ RULES:
 
       // Save a summary message to manager history
       const filesChanged = result.pendingWrites.map(f => f.path);
-      const summaryContent = result.prUrl
-        ? `**Agent completed task [${task.id}] ${task.title}**\n\nCreated PR #${result.prNumber}: ${result.prUrl}\n\n**Files changed:** ${filesChanged.join(", ")}`
-        : `**Agent worked on [${task.id}] ${task.title}**\n\n**Files staged:** ${filesChanged.length > 0 ? filesChanged.join(", ") : "None"}`;
+      let summaryContent: string;
+      if (result.prUrl) {
+        summaryContent = `**Agent completed task [${task.id}] ${task.title}**\n\nCreated PR #${result.prNumber}: ${result.prUrl}\n\n**Files changed:** ${filesChanged.join(", ")}`;
+      } else if (result.pushSha) {
+        summaryContent = `**Agent deployed [${task.id}] ${task.title}** to main\n\nCommit: \`${result.pushSha.slice(0, 7)}\`\n\n**Files pushed:** ${filesChanged.join(", ")}\n\n*Pull from Replit to see the changes live.*`;
+      } else {
+        summaryContent = `**Agent worked on [${task.id}] ${task.title}**\n\n**Files staged:** ${filesChanged.length > 0 ? filesChanged.join(", ") : "None"}`;
+      }
 
       await storage.addManagerMessage(bizId, {
         sender: "manager",
@@ -2595,7 +2604,7 @@ RULES:
         attachments: [],
       });
 
-      res.write(`data: ${JSON.stringify({ type: "complete", prUrl: result.prUrl, prNumber: result.prNumber })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "complete", prUrl: result.prUrl, prNumber: result.prNumber, pushSha: result.pushSha })}\n\n`);
     } catch (err: any) {
       console.error("[agent-run] Error:", err);
       res.write(`data: ${JSON.stringify({ type: "error", content: err.message || "Agent loop failed" })}\n\n`);

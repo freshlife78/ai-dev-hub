@@ -96,6 +96,17 @@ export const toolDefinitions: Anthropic.Tool[] = [
       required: ["title", "body", "branch_name"],
     },
   },
+  {
+    name: "commit_and_push",
+    description: "Commit all file changes directly to the main branch and push. Use this instead of create_pull_request for immediate deployment. Call this when you are finished making all changes.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        commit_message: { type: "string", description: "Commit message describing the changes" },
+      },
+      required: ["commit_message"],
+    },
+  },
 ];
 
 export async function executeReadFile(ctx: RepoContext, path: string): Promise<string> {
@@ -225,4 +236,51 @@ export async function executeCreatePR(
   }
   const prData = await prRes.json();
   return { url: prData.html_url, number: prData.number };
+}
+
+export async function executeCommitAndPush(
+  ctx: RepoContext,
+  pendingWrites: FileWrite[],
+  commitMessage: string,
+): Promise<{ sha: string; filesCommitted: number }> {
+  const h = headers(ctx.token);
+
+  // Get default branch
+  const repoRes = await fetch(`https://api.github.com/repos/${ctx.owner}/${ctx.repo}`, { headers: h });
+  if (!repoRes.ok) throw new Error("Failed to fetch repo info");
+  const repoInfo = await repoRes.json();
+  const defaultBranch = repoInfo.default_branch || "main";
+
+  let lastSha = "";
+  for (const file of pendingWrites) {
+    const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+    const existsRes = await fetch(
+      `https://api.github.com/repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}?ref=${defaultBranch}`,
+      { headers: h }
+    );
+    let fileSha: string | undefined;
+    if (existsRes.ok) fileSha = (await existsRes.json()).sha;
+
+    const putRes = await fetch(
+      `https://api.github.com/repos/${ctx.owner}/${ctx.repo}/contents/${encodedPath}`,
+      {
+        method: "PUT",
+        headers: h,
+        body: JSON.stringify({
+          message: `${commitMessage} — ${file.path}`,
+          content: Buffer.from(file.content).toString("base64"),
+          branch: defaultBranch,
+          ...(fileSha ? { sha: fileSha } : {}),
+        }),
+      }
+    );
+    if (!putRes.ok) {
+      const err = await putRes.json().catch(() => ({}));
+      throw new Error(`Failed to push ${file.path}: ${(err as any).message || "unknown"}`);
+    }
+    const putData = await putRes.json();
+    lastSha = putData.commit?.sha || "";
+  }
+
+  return { sha: lastSha, filesCommitted: pendingWrites.length };
 }

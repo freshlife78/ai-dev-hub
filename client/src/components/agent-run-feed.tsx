@@ -52,12 +52,14 @@ export function AgentRunFeed({
   taskId,
   projectId,
   instructions,
+  deployMode,
   onComplete,
 }: {
   businessId: string;
   taskId: string;
   projectId: string;
   instructions?: string;
+  deployMode?: string;
   onComplete?: () => void;
 }) {
   const [steps, setSteps] = useState<AgentStep[]>([]);
@@ -75,7 +77,7 @@ export function AgentRunFeed({
         const res = await fetch(`/api/businesses/${businessId}/manager/agent-run`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ taskId, projectId, instructions }),
+          body: JSON.stringify({ taskId, projectId, instructions, deployMode: deployMode || "push" }),
           signal: controller.signal,
         });
 
@@ -127,7 +129,7 @@ export function AgentRunFeed({
 
     run();
     return () => controller.abort();
-  }, [businessId, taskId, projectId, instructions, onComplete]);
+  }, [businessId, taskId, projectId, instructions, deployMode, onComplete]);
 
   useEffect(() => {
     feedEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -213,15 +215,21 @@ export function AgentRunFeed({
                   <div key={idx} className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 rounded-md border border-emerald-500/30">
                     <GitPullRequest className="w-4 h-4 text-emerald-500 shrink-0" />
                     <div className="flex-1">
-                      <div className="text-xs font-semibold text-emerald-500">Pull Request Created</div>
-                      <a
-                        href={step.prUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[11px] text-emerald-400 hover:underline flex items-center gap-1"
-                      >
-                        PR #{step.prNumber} <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
+                      <div className="text-xs font-semibold text-emerald-500">
+                        {step.prUrl ? "Pull Request Created" : "Pushed to Main"}
+                      </div>
+                      {step.prUrl ? (
+                        <a
+                          href={step.prUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[11px] text-emerald-400 hover:underline flex items-center gap-1"
+                        >
+                          PR #{step.prNumber} <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      ) : (
+                        <div className="text-[11px] text-emerald-400">{step.content}</div>
+                      )}
                       {step.branchName && (
                         <div className="text-[10px] font-mono text-muted-foreground mt-0.5">{step.branchName}</div>
                       )}

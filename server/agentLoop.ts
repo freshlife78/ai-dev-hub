@@ -8,15 +8,19 @@ import {
   executeListDirectory,
   executeSearchCode,
   executeCreatePR,
+  executeCommitAndPush,
 } from "./agentTools";
 
 const MAX_ITERATIONS = 25;
+
+export type DeployMode = "pr" | "push";
 
 export interface AgentRunOptions {
   apiKey: string;
   repo: RepoContext;
   systemPrompt: string;
   userMessage: string;
+  deployMode: DeployMode;
   onStep: (step: AgentStep) => void;
 }
 
@@ -24,12 +28,21 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<{
   pendingWrites: FileWrite[];
   prUrl?: string;
   prNumber?: number;
+  pushSha?: string;
 }> {
-  const { apiKey, repo, systemPrompt, userMessage, onStep } = options;
+  const { apiKey, repo, systemPrompt, userMessage, deployMode, onStep } = options;
   const anthropic = new Anthropic({ apiKey });
   const pendingWrites: FileWrite[] = [];
   let prUrl: string | undefined;
   let prNumber: number | undefined;
+  let pushSha: string | undefined;
+
+  // Filter tools based on deploy mode
+  const tools = toolDefinitions.filter(t => {
+    if (deployMode === "push") return t.name !== "create_pull_request";
+    if (deployMode === "pr") return t.name !== "commit_and_push";
+    return true;
+  });
 
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: userMessage },
@@ -42,7 +55,7 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<{
         model: "claude-sonnet-4-5-20250929",
         max_tokens: 8192,
         system: systemPrompt,
-        tools: toolDefinitions,
+        tools,
         messages,
       });
     } catch (err: any) {
@@ -162,6 +175,32 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<{
             break;
           }
 
+          case "commit_and_push": {
+            if (pendingWrites.length === 0) {
+              resultText = "Error: No files have been written yet. Use write_file first.";
+              onStep({ type: "error", content: resultText });
+            } else {
+              try {
+                const result = await executeCommitAndPush(
+                  repo,
+                  pendingWrites,
+                  input.commit_message,
+                );
+                pushSha = result.sha;
+                resultText = `Pushed ${result.filesCommitted} file(s) directly to main. Commit: ${result.sha.slice(0, 7)}`;
+                onStep({
+                  type: "pr_created",
+                  content: resultText,
+                  branchName: `main (${result.sha.slice(0, 7)})`,
+                });
+              } catch (err: any) {
+                resultText = `Error pushing to main: ${err.message}`;
+                onStep({ type: "error", content: resultText });
+              }
+            }
+            break;
+          }
+
           default:
             resultText = `Unknown tool: ${toolCall.name}`;
         }
@@ -180,5 +219,5 @@ export async function runAgentLoop(options: AgentRunOptions): Promise<{
     messages.push({ role: "user", content: toolResults });
   }
 
-  return { pendingWrites, prUrl, prNumber };
+  return { pendingWrites, prUrl, prNumber, pushSha };
 }

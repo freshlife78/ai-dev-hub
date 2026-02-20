@@ -521,7 +521,8 @@ export default function ManagerView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [projectFocusId, setProjectFocusId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [agentRun, setAgentRun] = useState<{ taskId: string; projectId: string; instructions?: string } | null>(null);
+  const [agentRun, setAgentRun] = useState<{ taskId: string; projectId: string; instructions?: string; deployMode?: string } | null>(null);
+  const [deployMode, setDeployMode] = useState<"push" | "pr">("push");
 
   const { data, isLoading } = useQuery<ManagerData>({
     queryKey: ["/api/businesses", selectedBusinessId, "manager"],
@@ -1072,6 +1073,7 @@ export default function ManagerView() {
                   taskId={agentRun.taskId}
                   projectId={agentRun.projectId}
                   instructions={agentRun.instructions}
+                  deployMode={agentRun.deployMode}
                   onComplete={() => {
                     queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "manager"] });
                     setAgentRun(null);
@@ -1117,6 +1119,15 @@ export default function ManagerView() {
                         ))}
                     </SelectContent>
                   </Select>
+                  <Select value={deployMode} onValueChange={(v) => setDeployMode(v as "push" | "pr")}>
+                    <SelectTrigger className="h-7 text-xs w-[130px] border-emerald-500/20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="push">Push to Main</SelectItem>
+                      <SelectItem value="pr">Create PR</SelectItem>
+                    </SelectContent>
+                  </Select>
                   <Button
                     size="sm"
                     disabled={!selectedTaskId || !!agentRun}
@@ -1126,6 +1137,7 @@ export default function ManagerView() {
                         taskId: selectedTaskId,
                         projectId: projectFocusId,
                         instructions: input.trim() || undefined,
+                        deployMode,
                       });
                       setInput("");
                     }}
