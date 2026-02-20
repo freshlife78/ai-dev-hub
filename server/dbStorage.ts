@@ -363,7 +363,7 @@ export class DatabaseStorage implements IStorage {
       title: task.title, description: task.description, reasoning: task.reasoning,
       fixSteps: task.fixSteps, replitPrompt: task.replitPrompt, filePath: task.filePath,
       discussion: task.discussion, autoAnalysisComplete: task.autoAnalysisComplete,
-      generatedPrompts: task.generatedPrompts,
+      generatedPrompts: task.generatedPrompts, dependencies: task.dependencies,
     });
     return task;
   }
@@ -384,6 +384,7 @@ export class DatabaseStorage implements IStorage {
     if (data.replitPrompt !== undefined) updates.replitPrompt = data.replitPrompt;
     if (data.repositoryId !== undefined) updates.repositoryId = data.repositoryId;
     if (data.filePath !== undefined) updates.filePath = data.filePath;
+    if (data.dependencies !== undefined) updates.dependencies = data.dependencies;
     if ((data as any).autoAnalysisComplete !== undefined) updates.autoAnalysisComplete = (data as any).autoAnalysisComplete;
     if ((data as any).autoAnalysisResult !== undefined) updates.autoAnalysisResult = (data as any).autoAnalysisResult;
     if ((data as any).autoAnalysisTimestamp !== undefined) updates.autoAnalysisTimestamp = (data as any).autoAnalysisTimestamp;
