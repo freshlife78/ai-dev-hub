@@ -2482,6 +2482,128 @@ Your role is to:\n- Help prioritize work based on business impact and urgency\n-
     res.json({ success: true });
   });
 
+  // Agent loop: streams steps via SSE as the AI reads, writes, and creates PRs
+  app.post("/api/businesses/:bizId/manager/agent-run", async (req, res) => {
+    const bizId = req.params.bizId;
+    const { taskId, projectId, instructions } = req.body;
+
+    if (!taskId || !projectId) {
+      return res.status(400).json({ message: "taskId and projectId are required" });
+    }
+
+    const task = await storage.getTask(projectId, taskId);
+    if (!task) return res.status(404).json({ message: "Task not found" });
+
+    const reviewAgent = await storage.getReviewAgent(bizId);
+    const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return res.status(500).json({ message: "No AI agent configured." });
+
+    // Find repo
+    let repo: any = null;
+    if (task.repositoryId) repo = await storage.getRepositoryWithToken(task.repositoryId);
+    if (!repo) {
+      const bizRepos = await storage.getRepositoriesWithTokens(bizId);
+      if (bizRepos.length >= 1) {
+        const project = await storage.getProject(bizId, projectId);
+        repo = (project?.defaultRepositoryId
+          ? bizRepos.find((r: any) => r.id === project.defaultRepositoryId)
+          : null) || bizRepos[0];
+      }
+    }
+    if (!repo || !repo.token || !repo.owner || !repo.repo) {
+      return res.status(400).json({ message: "No GitHub repository configured." });
+    }
+
+    // Build context from linked tasks
+    let depContext = "";
+    if (task.dependencies && task.dependencies.length > 0) {
+      const depTasks = [];
+      for (const depId of task.dependencies) {
+        const dt = await storage.getTask(projectId, depId);
+        if (dt) depTasks.push(dt);
+      }
+      if (depTasks.length > 0) {
+        depContext = "\n\nLINKED TASKS:\n" + depTasks.map(dt =>
+          `- [${dt.id}] ${dt.title} (${dt.status}): ${dt.description.slice(0, 200)}`
+        ).join("\n");
+      }
+    }
+
+    const systemPrompt = `You are a senior software developer working on the ${repo.owner}/${repo.repo} repository. You have tools to read files, list directories, search code, write files, and create Pull Requests.
+
+YOUR TASK:
+Title: ${task.title}
+ID: ${task.id}
+Type: ${task.type} | Priority: ${task.priority} | Status: ${task.status}
+Description: ${task.description}
+${task.fixSteps ? `Fix Steps: ${task.fixSteps}` : ""}
+${task.reasoning ? `Reasoning: ${task.reasoning}` : ""}
+${depContext}
+${instructions ? `\nADDITIONAL INSTRUCTIONS: ${instructions}` : ""}
+
+WORKFLOW:
+1. First, use list_directory and read_file to explore the codebase and understand the existing patterns, structure, and conventions
+2. Plan your changes
+3. Use write_file for each file you need to create or modify (provide COMPLETE file content)
+4. When all files are ready, use create_pull_request to submit your changes
+5. Keep your thinking concise — explain what you're doing and why
+
+RULES:
+- Follow the existing code style and patterns in the repo
+- Write production-quality code
+- Include all necessary imports and dependencies
+- Test your logic mentally before writing
+- Create a clear, descriptive PR`;
+
+    const userMessage = instructions
+      ? `Implement the task: ${task.title}. ${instructions}`
+      : `Implement the task: ${task.title}. Read the codebase first to understand the patterns, then make the changes and create a PR.`;
+
+    // SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    const { runAgentLoop } = await import("./agentLoop");
+
+    try {
+      const result = await runAgentLoop({
+        apiKey,
+        repo: { owner: repo.owner, repo: repo.repo, token: repo.token },
+        systemPrompt,
+        userMessage,
+        onStep: (step) => {
+          res.write(`data: ${JSON.stringify(step)}\n\n`);
+        },
+      });
+
+      // Save a summary message to manager history
+      const filesChanged = result.pendingWrites.map(f => f.path);
+      const summaryContent = result.prUrl
+        ? `**Agent completed task [${task.id}] ${task.title}**\n\nCreated PR #${result.prNumber}: ${result.prUrl}\n\n**Files changed:** ${filesChanged.join(", ")}`
+        : `**Agent worked on [${task.id}] ${task.title}**\n\n**Files staged:** ${filesChanged.length > 0 ? filesChanged.join(", ") : "None"}`;
+
+      await storage.addManagerMessage(bizId, {
+        sender: "manager",
+        content: summaryContent,
+        timestamp: new Date().toISOString(),
+        mode: "chat",
+        actions: [],
+        filesLoaded: filesChanged.map(p => ({ path: p, repo: `${repo.owner}/${repo.repo}` })),
+        attachments: [],
+      });
+
+      res.write(`data: ${JSON.stringify({ type: "complete", prUrl: result.prUrl, prNumber: result.prNumber })}\n\n`);
+    } catch (err: any) {
+      console.error("[agent-run] Error:", err);
+      res.write(`data: ${JSON.stringify({ type: "error", content: err.message || "Agent loop failed" })}\n\n`);
+    }
+
+    res.end();
+  });
+
   // Manager generates a code fix for a task and returns it as a manager message
   app.post("/api/businesses/:bizId/manager/generate-fix", async (req, res) => {
     try {

@@ -54,8 +54,10 @@ import {
   ChevronRight,
   Wrench,
   ExternalLink,
+  Play,
 } from "lucide-react";
 import { DiffView } from "@/components/diff-view";
+import { AgentRunFeed } from "@/components/agent-run-feed";
 import type { ManagerMessage, ManagerAction, ManagerAlert, ChangelogEntry, CodeFix, CodeFixFile } from "@shared/schema";
 
 interface ManagerData {
@@ -519,6 +521,7 @@ export default function ManagerView() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [projectFocusId, setProjectFocusId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [agentRun, setAgentRun] = useState<{ taskId: string; projectId: string; instructions?: string } | null>(null);
 
   const { data, isLoading } = useQuery<ManagerData>({
     queryKey: ["/api/businesses", selectedBusinessId, "manager"],
@@ -1062,12 +1065,18 @@ export default function ManagerView() {
               </div>
             )}
 
-            {generateFixMutation.isPending && (
-              <div className="flex justify-start">
-                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3.5 py-2.5 flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
-                  <span className="text-sm text-emerald-500">Generating code fix — reading files and creating changes...</span>
-                </div>
+            {agentRun && (
+              <div className="w-full">
+                <AgentRunFeed
+                  businessId={selectedBusinessId}
+                  taskId={agentRun.taskId}
+                  projectId={agentRun.projectId}
+                  instructions={agentRun.instructions}
+                  onComplete={() => {
+                    queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "manager"] });
+                    setAgentRun(null);
+                  }}
+                />
               </div>
             )}
 
@@ -1095,7 +1104,7 @@ export default function ManagerView() {
                     onValueChange={(val) => setSelectedTaskId(val === "none" ? null : val)}
                   >
                     <SelectTrigger className="h-7 text-xs flex-1 border-emerald-500/20">
-                      <SelectValue placeholder="Select task to fix..." />
+                      <SelectValue placeholder="Select task to implement..." />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Select a task...</SelectItem>
@@ -1110,10 +1119,10 @@ export default function ManagerView() {
                   </Select>
                   <Button
                     size="sm"
-                    disabled={!selectedTaskId || generateFixMutation.isPending}
+                    disabled={!selectedTaskId || !!agentRun}
                     onClick={() => {
                       if (!selectedTaskId || !projectFocusId) return;
-                      generateFixMutation.mutate({
+                      setAgentRun({
                         taskId: selectedTaskId,
                         projectId: projectFocusId,
                         instructions: input.trim() || undefined,
@@ -1122,12 +1131,12 @@ export default function ManagerView() {
                     }}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shrink-0"
                   >
-                    {generateFixMutation.isPending ? (
+                    {agentRun ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
-                      <Wrench className="w-3.5 h-3.5" />
+                      <Play className="w-3.5 h-3.5" />
                     )}
-                    {generateFixMutation.isPending ? "Generating..." : "Generate Fix"}
+                    {agentRun ? "Running..." : "Run Agent"}
                   </Button>
                 </div>
               )}
