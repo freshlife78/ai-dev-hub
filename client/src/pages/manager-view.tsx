@@ -518,11 +518,17 @@ export default function ManagerView() {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string; type: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [projectFocusId, setProjectFocusId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<ManagerData>({
     queryKey: ["/api/businesses", selectedBusinessId, "manager"],
     enabled: !!selectedBusinessId,
     refetchInterval: 30000,
+  });
+
+  const { data: focusedProjectTasks } = useQuery<any[]>({
+    queryKey: ["/api/businesses", selectedBusinessId, "projects", projectFocusId, "tasks"],
+    enabled: !!selectedBusinessId && !!projectFocusId,
   });
 
   const [repoScanData, setRepoScanData] = useState<any[] | null>(null);
@@ -1056,20 +1062,75 @@ export default function ManagerView() {
               </div>
             )}
 
+            {generateFixMutation.isPending && (
+              <div className="flex justify-start">
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3.5 py-2.5 flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                  <span className="text-sm text-emerald-500">Generating code fix — reading files and creating changes...</span>
+                </div>
+              </div>
+            )}
+
             <div ref={chatEndRef} />
           </div>
         </ScrollArea>
 
         <div className="p-3 border-t border-border">
           {projectFocusId && (
-            <div className="flex items-center gap-2 mb-2 px-2 py-1.5 bg-primary/5 border border-primary/20 rounded-md">
-              <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
-              <span className="text-xs text-primary flex-1">
-                Focused on <span className="font-medium">{projectStats.find(p => p.id === projectFocusId)?.name || "project"}</span> — AI has full task context for this project
-              </span>
-              <button onClick={() => setProjectFocusId(null)} className="text-primary/60 hover:text-primary">
-                <X className="w-3 h-3" />
-              </button>
+            <div className="space-y-2 mb-2">
+              <div className="flex items-center gap-2 px-2 py-1.5 bg-primary/5 border border-primary/20 rounded-md">
+                <FolderOpen className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span className="text-xs text-primary flex-1">
+                  Focused on <span className="font-medium">{projectStats.find(p => p.id === projectFocusId)?.name || "project"}</span>
+                </span>
+                <button onClick={() => setProjectFocusId(null)} className="text-primary/60 hover:text-primary">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              {focusedProjectTasks && focusedProjectTasks.length > 0 && (
+                <div className="flex items-center gap-2 px-2 py-1.5 bg-emerald-500/5 border border-emerald-500/20 rounded-md">
+                  <Wrench className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                  <Select
+                    value={selectedTaskId || "none"}
+                    onValueChange={(val) => setSelectedTaskId(val === "none" ? null : val)}
+                  >
+                    <SelectTrigger className="h-7 text-xs flex-1 border-emerald-500/20">
+                      <SelectValue placeholder="Select task to fix..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Select a task...</SelectItem>
+                      {focusedProjectTasks
+                        .filter((t: any) => t.status !== "Done")
+                        .map((t: any) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            [{t.id}] {t.title}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    disabled={!selectedTaskId || generateFixMutation.isPending}
+                    onClick={() => {
+                      if (!selectedTaskId || !projectFocusId) return;
+                      generateFixMutation.mutate({
+                        taskId: selectedTaskId,
+                        projectId: projectFocusId,
+                        instructions: input.trim() || undefined,
+                      });
+                      setInput("");
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5 shrink-0"
+                  >
+                    {generateFixMutation.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Wrench className="w-3.5 h-3.5" />
+                    )}
+                    {generateFixMutation.isPending ? "Generating..." : "Generate Fix"}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           {attachedFiles.length > 0 && (
