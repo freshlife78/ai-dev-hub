@@ -1173,7 +1173,7 @@ Rules:
       const anthropic = new Anthropic({ apiKey });
       const aiMsg = await anthropic.messages.create({
         model: selectedModel,
-        max_tokens: 8192,
+        max_tokens: 16384,
         messages: [{ role: "user", content: "Generate the code fix now. Respond with ONLY the JSON object." }],
         system: systemPrompt,
       });
