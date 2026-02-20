@@ -387,7 +387,7 @@ export async function registerRoutes(
   });
 
   // Bulk-link tasks: link all provided task IDs to each other bidirectionally
-  app.post("/api/businesses/:bizId/projects/:projectId/tasks/bulk-link", async (req, res) => {
+  app.post("/api/businesses/:bizId/projects/:projectId/link-tasks", async (req, res) => {
     try {
       const { taskIds } = req.body;
       if (!Array.isArray(taskIds) || taskIds.length < 2) {

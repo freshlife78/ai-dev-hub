@@ -323,7 +323,7 @@ function ProjectTasksView() {
 
   const bulkLinkMutation = useMutation({
     mutationFn: async (taskIds: string[]) => {
-      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${selectedProjectId}/tasks/bulk-link`, { taskIds });
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${selectedProjectId}/link-tasks`, { taskIds });
       return res.json();
     },
     onSuccess: (data: { linked: number }) => {

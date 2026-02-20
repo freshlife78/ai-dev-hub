@@ -187,7 +187,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
 
   const linkTaskMutation = useMutation({
     mutationFn: async (taskIds: string[]) => {
-      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/bulk-link`, { taskIds });
+      const res = await apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${projectId}/link-tasks`, { taskIds });
       return await res.json();
     },
     onSuccess: () => {
