@@ -1020,6 +1020,408 @@ Example of the tone to aim for:
     }
   });
 
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/discuss-stream", async (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const sendSSE = (event: string, data: any) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const { message, includeTaskContext, isAutoAnalysis, isReanalysis, model } = req.body;
+      if (!message || typeof message !== "string") {
+        sendSSE("error", { message: "message is required" });
+        res.end();
+        return;
+      }
+      const selectedModel = model || "claude-sonnet-4-5-20250929";
+
+      sendSSE("stage", { stage: "reading_context", message: "Reading task context..." });
+
+      const task = await storage.getTask(req.params.projectId, req.params.taskId);
+      if (!task) {
+        sendSSE("error", { message: "Task not found" });
+        res.end();
+        return;
+      }
+
+      const bizId = req.params.bizId;
+      const reviewAgent = await storage.getReviewAgent(bizId);
+      const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        sendSSE("error", { message: "No AI agent configured and ANTHROPIC_API_KEY is not set." });
+        res.end();
+        return;
+      }
+
+      const filePathRegex = /(?:`([^`]+\.\w{1,5})`|(?:(?:check|look at|see|open|review|show|examine|inspect)\s+)([^\s,."']+\.\w{1,5})|(?:^|\s)((?:[\w@.-]+\/)+[\w.-]+\.\w{1,5}))/gi;
+      const validExts = new Set(["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "php", "rb", "css", "scss", "html", "json", "yaml", "yml", "md", "sql", "sh", "vue", "svelte"]);
+
+      function extractFilePaths(text: string): string[] {
+        const results: string[] = [];
+        let m;
+        const regex = new RegExp(filePathRegex.source, filePathRegex.flags);
+        while ((m = regex.exec(text)) !== null) {
+          const fp = (m[1] || m[2] || m[3]).trim();
+          const ext = fp.split(".").pop()?.toLowerCase();
+          if (ext && validExts.has(ext) && !results.includes(fp)) {
+            results.push(fp);
+          }
+        }
+        return results;
+      }
+
+      const reverifyPatterns = [
+        /check\s*again/i, /verify/i, /review\s*(it\s*)?again/i,
+        /review\s*(the\s*)?(code|changes|fix|file|implementation)/i,
+        /is\s*it\s*(fixed|done|ready|working)/i,
+        /i\s*(pushed|made|applied|deployed|committed)\s*(the\s*)?(fix|changes?|update|code)?/i,
+        /done[\s,]*\s*(can\s*you\s*)?(verify|check|review)/i,
+        /re-?(check|verify|review|analyze|examine|fetch|load)/i,
+        /fixed\s*(it|that|this|the)/i, /try\s*again/i, /look\s*again/i,
+        /check\s*(the\s*)?(code|changes|fix|file|latest|current|new)/i,
+        /changes?\s*(are\s*)?(done|ready|pushed|committed|merged|deployed|live)/i,
+        /updated?\s*(the\s*)?(code|file|fix|implementation)/i,
+        /can\s*you\s*(re-?)?check/i, /refresh\s*(the\s*)?(files?|code|context)/i,
+        /fetch\s*(the\s*)?(latest|fresh|new|updated)/i,
+        /how\s*(does|is)\s*(it|the\s*(code|fix))\s*(look|now)/i,
+        /did\s*(that|it|the\s*fix)\s*(work|help)/i,
+        /still\s*(broken|failing|wrong|incomplete|an?\s*issue)/i,
+        /any\s*(progress|improvement|change)/i,
+        /what\s*(does|do)\s*(it|the\s*code)\s*look\s*like\s*now/i,
+      ];
+      const isReverification = isReanalysis || (!isAutoAnalysis && reverifyPatterns.some(p => p.test(message)));
+
+      let detectedFiles: string[];
+      if (isAutoAnalysis) {
+        const allText = `${task.description}\n${task.fixSteps}\n${task.reasoning}\n${task.replitPrompt}`;
+        detectedFiles = extractFilePaths(allText);
+        if (task.filePath && !detectedFiles.includes(task.filePath)) {
+          detectedFiles.unshift(task.filePath);
+        }
+      } else {
+        detectedFiles = extractFilePaths(message);
+      }
+
+      const existingMessages = await storage.getDiscussion(req.params.projectId, req.params.taskId);
+
+      if (isReverification) {
+        const previouslyLoadedFiles = new Set<string>();
+        for (const m of existingMessages) {
+          if (m.filesLoaded) {
+            for (const f of m.filesLoaded) previouslyLoadedFiles.add(f);
+          }
+        }
+        if (task.filePath) previouslyLoadedFiles.add(task.filePath);
+        Array.from(previouslyLoadedFiles).forEach(fp => {
+          if (!detectedFiles.includes(fp)) detectedFiles.push(fp);
+        });
+        if (detectedFiles.length === 0) {
+          const allText = `${task.description || ''}\n${task.fixSteps || ''}\n${task.reasoning || ''}\n${task.replitPrompt || ''}`;
+          const taskTextFiles = extractFilePaths(allText);
+          if (task.filePath && !taskTextFiles.includes(task.filePath)) taskTextFiles.unshift(task.filePath);
+          taskTextFiles.forEach(fp => { if (!detectedFiles.includes(fp)) detectedFiles.push(fp); });
+        }
+      }
+
+      const repoId = task.repositoryId;
+      let repo: any = null;
+      if (repoId) {
+        repo = await storage.getRepositoryWithToken(repoId);
+      }
+
+      const loadedFiles: { path: string; content: string; source: string }[] = [];
+      const loadedFilePaths: string[] = [];
+      let defaultBranch = "main";
+      let latestSha: string | null = null;
+
+      const cacheBustRef = () => (isReverification && latestSha ? latestSha : defaultBranch);
+
+      async function fetchFileFromGitHub(filePath: string): Promise<string | null> {
+        if (!repo || !repo.token || !repo.owner || !repo.repo) return null;
+        try {
+          const encodedPath = filePath.split("/").map(encodeURIComponent).join("/");
+          const ref = cacheBustRef();
+          const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}&_=${Date.now()}`;
+          const ghRes = await fetch(url, {
+            headers: {
+              Authorization: `token ${repo.token}`,
+              Accept: "application/vnd.github.v3+json",
+              "User-Agent": "AI-Dev-Hub",
+              ...(isReverification ? { "Cache-Control": "no-store, no-cache", Pragma: "no-cache" } : {}),
+            },
+          });
+          if (!ghRes.ok) return null;
+          const ghData = await ghRes.json();
+          if (ghData.encoding === "base64" && ghData.content) {
+            return Buffer.from(ghData.content, "base64").toString("utf-8");
+          }
+          return ghData.content || null;
+        } catch {
+          return null;
+        }
+      }
+
+      if (!repo && bizId) {
+        const bizRepos = await storage.getRepositoriesWithTokens(bizId);
+        if (bizRepos.length === 1) {
+          repo = bizRepos[0];
+        } else if (bizRepos.length > 1) {
+          const project = await storage.getProject(bizId, req.params.projectId);
+          if (project?.defaultRepositoryId) {
+            repo = bizRepos.find(r => r.id === project.defaultRepositoryId) || null;
+          }
+          if (!repo) repo = bizRepos[0];
+        }
+      }
+
+      if (repo && isReverification) {
+        const branchAndSha = await getRepoBranchAndLatestSha(repo);
+        defaultBranch = branchAndSha.defaultBranch;
+        latestSha = branchAndSha.latestSha;
+      }
+
+      sendSSE("stage", { stage: "fetching_files", message: "Fetching source files..." });
+
+      if (!isAutoAnalysis && task.filePath && repo) {
+        const content = await fetchFileFromGitHub(task.filePath);
+        if (content) {
+          const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n\n[File truncated]" : content;
+          loadedFiles.push({ path: task.filePath, content: truncated, source: isReverification ? "re-fetched from GitHub main (latest)" : "attached to task" });
+          loadedFilePaths.push(task.filePath);
+        }
+      }
+
+      const previouslyLoaded = new Set<string>();
+      if (!isReverification) {
+        for (const m of existingMessages) {
+          if (m.filesLoaded) {
+            for (const f of m.filesLoaded) previouslyLoaded.add(f);
+          }
+        }
+      }
+
+      for (const fp of detectedFiles) {
+        if (loadedFilePaths.includes(fp)) continue;
+        const content = await fetchFileFromGitHub(fp);
+        if (content) {
+          const truncated = content.length > 8000 ? content.slice(0, 8000) + "\n\n[File truncated]" : content;
+          const source = isReverification ? "re-fetched from GitHub main (latest)" : (isAutoAnalysis ? "auto-detected from task" : "mentioned by user");
+          loadedFiles.push({ path: fp, content: truncated, source });
+          loadedFilePaths.push(fp);
+        }
+      }
+
+      if (!isAutoAnalysis) {
+        const userMsg = await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+          sender: "user",
+          content: message,
+          timestamp: new Date().toISOString(),
+          filesLoaded: isReverification ? loadedFilePaths : loadedFilePaths.filter((p) => !previouslyLoaded.has(p) && p !== task.filePath),
+          isAutoAnalysis: false,
+          isReverification: isReverification && loadedFiles.length > 0,
+        });
+        if (!userMsg) {
+          sendSSE("error", { message: "Failed to save message" });
+          res.end();
+          return;
+        }
+      }
+
+      const taskContext = `\nTASK DETAILS:\nID: ${task.id}\nTitle: ${task.title}\nType: ${task.type}\nStatus: ${task.status}\nPriority: ${task.priority}\nDescription: ${task.description}\nReasoning: ${task.reasoning}\nFix Steps: ${task.fixSteps}\n${task.filePath ? `Related File: ${task.filePath}` : ""}`;
+
+      let dependencyContext = "";
+      if (task.dependencies && task.dependencies.length > 0) {
+        const depTasks = [];
+        for (const depId of task.dependencies) {
+          const depTask = await storage.getTask(req.params.projectId, depId);
+          if (depTask) depTasks.push(depTask);
+        }
+        if (depTasks.length > 0) {
+          dependencyContext = "\n\nLINKED TASKS (this task is connected to these — consider their context when responding):";
+          for (const dt of depTasks) {
+            dependencyContext += `\n- [${dt.id}] ${dt.title} (${dt.type} | ${dt.status} | ${dt.priority})`;
+            dependencyContext += `\n  Description: ${dt.description.slice(0, 300)}${dt.description.length > 300 ? "..." : ""}`;
+            if (dt.fixSteps) dependencyContext += `\n  Fix Steps: ${dt.fixSteps.slice(0, 200)}${dt.fixSteps.length > 200 ? "..." : ""}`;
+            if (dt.filePath) dependencyContext += `\n  File: ${dt.filePath}`;
+          }
+        }
+      }
+
+      let codeContext = "";
+      if (loadedFiles.length > 0) {
+        if (isReverification) {
+          codeContext = "\n\nCODE CONTEXT (RE-FETCHED LATEST FROM GITHUB MAIN BRANCH):";
+          codeContext += "\nIMPORTANT: These files were just re-fetched from GitHub main branch. This is FRESH code that may contain fixes since your last review. Analyze this NEW version, not your memory of the old version.";
+        } else {
+          codeContext = "\n\nCODE CONTEXT:";
+        }
+        for (const f of loadedFiles) {
+          codeContext += `\n\nFile: ${f.path} (${f.source})\n\`\`\`\n${f.content}\n\`\`\``;
+        }
+      }
+
+      let codeReviewContext = "";
+      const reviews = await storage.getCodeReviews(task.id);
+      if (reviews.length > 0) {
+        const latest = reviews[0];
+        let reviewText = latest.review;
+        if (reviewText.length > 4000) {
+          reviewText = reviewText.slice(0, 4000) + "\n\n[Review truncated for context length]";
+        }
+        codeReviewContext = `\n\nRECENT CODE REVIEW:\nFile: ${latest.filePath}\nReview Date: ${latest.timestamp}\n${latest.question ? `Question: ${latest.question}\n` : ""}Results:\n${reviewText}`;
+      }
+
+      const previousDiscussion = existingMessages
+        .map((m) => `${m.sender === "user" ? "User" : "Claude"}: ${m.content}`)
+        .join("\n\n");
+
+      let systemPrompt: string;
+      let userPrompt: string;
+
+      if (isAutoAnalysis) {
+        systemPrompt = `You are a friendly, experienced developer colleague helping review a task in a software project. You have access to the task details and any relevant source code files.
+
+${taskContext}${dependencyContext}${codeContext}${codeReviewContext}
+
+When responding:
+- Be conversational and natural, like a helpful colleague — not a formal auditor
+- Lead with the big picture: what's working, what's the main gap
+- Your response MUST include one of these exact status lines (the system parses these, so include exactly one):
+  - "STATUS: COMPLETE" if the task appears fully implemented
+  - "STATUS: INCOMPLETE" if the task has not been implemented
+  - "STATUS: PARTIAL" if the task is partially done
+  But weave it naturally into your response rather than making it a cold header. For example: "Overall this looks like STATUS: PARTIAL — the core logic is solid but the UI piece still needs work."
+- Explain WHY things matter, not just what's missing. Help the user understand the impact.
+- Be encouraging about progress that's been made before discussing gaps
+- Guide toward the next concrete action — what should they do next?
+- Keep it concise but warm. Use markdown for code snippets when helpful, but avoid excessive formatting, checklists, or score blocks
+- If no source files were loaded, say so naturally and explain what you based your analysis on`;
+        userPrompt = "Take a look at this task and the code (if available). Give me your honest take on where things stand and what needs to happen next.";
+      } else {
+        systemPrompt = `You are a friendly, experienced developer colleague helping with a specific task in a software project. You have access to the task details, code review results, and any loaded source files.
+
+${taskContext}${dependencyContext}${codeContext}${codeReviewContext}
+
+When responding in this task discussion:
+- Be conversational and natural, like a helpful colleague who genuinely wants to help
+- Lead with the main point, not a formal status header
+- Explain WHY things matter, not just WHAT is missing
+- Guide the user toward the next action they should take
+- Be encouraging about progress made before discussing what's left
+- Use a friendly tone while staying technically accurate
+- Avoid excessive formatting, checklists, and status blocks unless the user specifically asks for a detailed breakdown
+- Explain tradeoffs and options when relevant, don't just dictate requirements
+- Use markdown for code snippets when helpful, but keep prose natural
+- The user can mention file paths in their messages and those files will be automatically loaded for you. If you need to see a file that hasn't been loaded, ask the user to mention it by its full path.
+- If the user asks you to change the task status (e.g. "mark as done", "set to Done", "change to In Progress"), include this EXACT plain text (no markdown, no code blocks, no backticks) on its own line at the very END of your response:
+ACTION:UPDATE_STATUS
+{"newStatus":"Done"}
+Replace "Done" with the appropriate status: Done, In Progress, Quality Review, or Open. IMPORTANT: Do NOT wrap this in markdown code blocks or backticks - it must be plain text so the system can parse it. Only include this when the user explicitly requests a status change.
+
+Example of the tone to aim for:
+"Good news — the notifications screen is built and working! The only thing left is the tab navigation isn't wired up yet. Once you add the tab to _layout.tsx, users will be able to access it. Want me to generate the fix prompt for that?"`;
+        userPrompt = message;
+      }
+
+      sendSSE("stage", { stage: "thinking", message: "Thinking..." });
+
+      const anthropic = new Anthropic({ apiKey });
+      const stream = anthropic.messages.stream({
+        model: selectedModel,
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [
+          ...(previousDiscussion ? [{ role: "user" as const, content: `PREVIOUS DISCUSSION:\n${previousDiscussion}` }, { role: "assistant" as const, content: "I have the context from our previous discussion. How can I help?" }] : []),
+          { role: "user" as const, content: userPrompt },
+        ],
+      });
+
+      let fullResponse = "";
+      let firstToken = true;
+
+      stream.on("text", (text) => {
+        if (firstToken) {
+          sendSSE("stage", { stage: "writing", message: "Writing response..." });
+          firstToken = false;
+        }
+        fullResponse += text;
+        sendSSE("token", { token: text });
+      });
+
+      const finalMessage = await stream.finalMessage();
+
+      let responseText = fullResponse;
+
+      let statusUpdated = false;
+      let cleanedForParsing = responseText
+        .replace(/```[\s\S]*?```/g, (match) => match.replace(/```/g, ""))
+        .replace(/`([^`]+)`/g, "$1");
+      const statusActionMatch = cleanedForParsing.match(/ACTION:UPDATE_STATUS\s*[\n\r]+\s*(\{[^}]+\})/);
+      if (statusActionMatch) {
+        try {
+          const parsed = JSON.parse(statusActionMatch[1]);
+          const newStatus = parsed.newStatus;
+          if (["Open", "In Progress", "Quality Review", "Done"].includes(newStatus)) {
+            await storage.updateTask(
+              req.params.projectId,
+              req.params.taskId,
+              { status: newStatus } as any,
+              bizId
+            );
+            statusUpdated = true;
+            responseText = responseText
+              .replace(/```\s*\n?\s*ACTION:UPDATE_STATUS\s*\n?\s*```/g, "")
+              .replace(/```\s*\n?\s*\{"newStatus"\s*:\s*"[^"]+"\}\s*\n?\s*```/g, "")
+              .replace(/`ACTION:UPDATE_STATUS`/g, "")
+              .replace(/`\{"newStatus"\s*:\s*"[^"]+"\}`/g, "")
+              .replace(/ACTION:UPDATE_STATUS\s*[\n\r]+\s*\{[^}]+\}/g, "")
+              .trim();
+          }
+        } catch {}
+      }
+
+      await storage.addDiscussionMessage(req.params.projectId, req.params.taskId, {
+        sender: "claude",
+        model: selectedModel,
+        content: responseText,
+        timestamp: new Date().toISOString(),
+        filesLoaded: (isAutoAnalysis || isReverification) ? loadedFilePaths : [],
+        isAutoAnalysis: !!isAutoAnalysis,
+        isReverification: isReverification && loadedFiles.length > 0,
+      });
+
+      if (isAutoAnalysis) {
+        let analysisResult: "complete" | "incomplete" | "partial" = "incomplete";
+        const upper = responseText.toUpperCase();
+        if (upper.includes("STATUS: COMPLETE") || upper.includes("STATUS:COMPLETE")) {
+          analysisResult = "complete";
+        } else if (upper.includes("STATUS: PARTIAL") || upper.includes("STATUS:PARTIAL")) {
+          analysisResult = "partial";
+        }
+        await storage.updateTask(req.params.projectId, req.params.taskId, {
+          autoAnalysisComplete: true,
+          autoAnalysisResult: analysisResult,
+          autoAnalysisTimestamp: new Date().toISOString(),
+        } as any, bizId);
+      }
+
+      sendSSE("done", { statusUpdated, filesLoaded: loadedFilePaths });
+      res.end();
+    } catch (err: any) {
+      console.error("[discuss-stream] Error:", err);
+      let errorMsg = err.message || "Unknown error";
+      if (err.status === 429 || errorMsg.includes("rate_limit")) {
+        errorMsg = "AI rate limit reached. Please wait a moment and try again.";
+      }
+      sendSSE("error", { message: errorMsg });
+      res.end();
+    }
+  });
+
   // Generate a code fix for a task using AI
   app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/generate-code-fix", async (req, res) => {
     const { model, instructions } = req.body;

@@ -100,6 +100,9 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const [branchNameInput, setBranchNameInput] = useState("");
   const [prCreatingFixId, setPrCreatingFixId] = useState<string | null>(null);
   const [linkingOpen, setLinkingOpen] = useState(false);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingStage, setStreamingStage] = useState<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { data: repositories = [] } = useQuery<RepositorySafe[]>({
@@ -251,14 +254,135 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
     });
   };
 
+  const sendStreamingMessage = useCallback(async (params: { message: string; isAutoAnalysis?: boolean; isReanalysis?: boolean }) => {
+    if (!selectedBusinessId) return;
+    setIsStreaming(true);
+    setStreamingContent("");
+    setStreamingStage(null);
+
+    if (!params.isAutoAnalysis) {
+      queryClient.setQueryData<DiscussionMessage[]>(
+        ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"],
+        (old = []) => [...old, {
+          id: `temp-${Date.now()}`,
+          sender: "user" as const,
+          content: params.message,
+          timestamp: new Date().toISOString(),
+          filesLoaded: [],
+          isAutoAnalysis: false,
+          isReverification: false,
+        }]
+      );
+    }
+
+    try {
+      const payload = {
+        message: params.message,
+        includeTaskContext: true,
+        isAutoAnalysis: params.isAutoAnalysis || false,
+        isReanalysis: params.isReanalysis || false,
+        model: selectedModel,
+      };
+
+      const response = await fetch(
+        `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/discuss-stream`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          credentials: "include",
+        }
+      );
+
+      if (!response.ok || !response.body) {
+        throw new Error(`Stream request failed: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const processEvent = (eventType: string, dataStr: string) => {
+        try {
+          const data = JSON.parse(dataStr);
+          if (eventType === "stage") {
+            setStreamingStage(data.stage);
+          } else if (eventType === "token") {
+            setStreamingContent(prev => prev + data.token);
+          } else if (eventType === "done") {
+            setIsStreaming(false);
+            setStreamingStage(null);
+            setStreamingContent("");
+            setDiscussionInput("");
+            setAutoAnalysisError(null);
+            if (params.isAutoAnalysis) {
+              setAutoAnalysisTriggered(false);
+            }
+            queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"] });
+            queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+            if (data.statusUpdated) {
+              queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "changelog"] });
+              toast({ title: "Status updated", description: "Task status has been changed." });
+            }
+          } else if (eventType === "error") {
+            setIsStreaming(false);
+            setStreamingStage(null);
+            setStreamingContent("");
+            if (params.isAutoAnalysis) {
+              setAutoAnalysisError(data.message || "Unknown error");
+            } else {
+              toast({ title: "Discussion failed", description: data.message || "Unknown error", variant: "destructive" });
+            }
+          }
+        } catch {}
+      };
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        let eventBoundary: number;
+        while ((eventBoundary = buffer.indexOf("\n\n")) !== -1) {
+          const eventBlock = buffer.slice(0, eventBoundary);
+          buffer = buffer.slice(eventBoundary + 2);
+
+          let eventType = "";
+          let eventData = "";
+          for (const line of eventBlock.split("\n")) {
+            if (line.startsWith("event: ")) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              eventData = line.slice(6);
+            }
+          }
+          if (eventType && eventData) {
+            processEvent(eventType, eventData);
+          }
+        }
+      }
+    } catch (err: any) {
+      setIsStreaming(false);
+      setStreamingStage(null);
+      setStreamingContent("");
+      if (params.isAutoAnalysis) {
+        setAutoAnalysisError(err.message || "Connection failed");
+      } else {
+        toast({ title: "Discussion failed", description: err.message || "Connection failed", variant: "destructive" });
+      }
+    }
+  }, [selectedBusinessId, projectId, task.id, selectedModel, toast]);
+
   const triggerAutoAnalysis = useCallback(() => {
     setAutoAnalysisTriggered(true);
     setAutoAnalysisError(null);
-    discussMutation.mutate({
+    sendStreamingMessage({
       message: "Analyze this task automatically. Check the code files provided (if any) against the task requirements and report your findings.",
       isAutoAnalysis: true,
     });
-  }, [discussMutation]);
+  }, [sendStreamingMessage]);
 
   useEffect(() => {
     if (
@@ -267,18 +391,19 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
       discussion.length === 0 &&
       !autoAnalysisTriggered &&
       !discussMutation.isPending &&
+      !isStreaming &&
       selectedBusinessId &&
       !task.autoAnalysisComplete
     ) {
       triggerAutoAnalysis();
     }
-  }, [activeTab, discussionLoading, discussion.length, autoAnalysisTriggered, discussMutation.isPending, selectedBusinessId, task.autoAnalysisComplete, triggerAutoAnalysis]);
+  }, [activeTab, discussionLoading, discussion.length, autoAnalysisTriggered, discussMutation.isPending, isStreaming, selectedBusinessId, task.autoAnalysisComplete, triggerAutoAnalysis]);
 
   useEffect(() => {
     if (messagesEndRef.current && activeTab === "discussion") {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [discussion, activeTab]);
+  }, [discussion, activeTab, streamingContent]);
 
   useEffect(() => {
     setAutoAnalysisTriggered(false);
@@ -401,7 +526,7 @@ ${task.fixSteps}`;
   const handleSendMessage = () => {
     const trimmed = discussionInput.trim();
     if (!trimmed) return;
-    discussMutation.mutate({ message: trimmed });
+    sendStreamingMessage({ message: trimmed });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -415,7 +540,7 @@ ${task.fixSteps}`;
     console.log(`[DISCUSS-FE] Re-Analyze button clicked for task ${task.id}`);
     setAutoAnalysisTriggered(true);
     setAutoAnalysisError(null);
-    discussMutation.mutate({
+    sendStreamingMessage({
       message: "Re-analyze this task. Re-fetch all files from GitHub main and check the LATEST code against the task requirements. Report updated findings based on the fresh code.",
       isAutoAnalysis: true,
       isReanalysis: true,
@@ -430,7 +555,7 @@ ${task.fixSteps}`;
     const hasTaskFilePath = !!task.filePath;
     console.log(`[DISCUSS-FE] hasFilesInHistory=${hasFilesInHistory}, hasTaskFilePath=${hasTaskFilePath}, taskHasFileRefsInText=${taskHasFileRefsInText}, discussionLoading=${discussionLoading}`);
     if (discussionLoading) {
-      discussMutation.mutate({
+      sendStreamingMessage({
         message: "I've made changes and pushed to GitHub. Please re-fetch all files from main and review the latest code against the task requirements.",
         isReanalysis: true,
       });
@@ -444,7 +569,7 @@ ${task.fixSteps}`;
       });
       return;
     }
-    discussMutation.mutate({
+    sendStreamingMessage({
       message: "I've made changes and pushed to GitHub. Please re-fetch all files from main and review the latest code against the task requirements.",
       isReanalysis: true,
     });
@@ -482,10 +607,38 @@ ${task.fixSteps}`;
         <Sparkles className="w-5 h-5 text-primary animate-pulse" />
       </div>
       <div className="text-center space-y-1">
-        <p className="text-xs font-medium text-foreground">Analyzing task...</p>
-        <p className="text-[10px] text-muted-foreground">Fetching files and reviewing code</p>
+        <p className="text-xs font-medium text-foreground">
+          {streamingStage === "reading_context" ? "Reading task context..." :
+           streamingStage === "fetching_files" ? "Fetching source files..." :
+           streamingStage === "thinking" ? "Thinking..." :
+           streamingStage === "writing" ? "Writing response..." :
+           "Analyzing task..."}
+        </p>
+        <p className="text-[10px] text-muted-foreground">
+          {streamingStage === "reading_context" ? "Loading task details and dependencies" :
+           streamingStage === "fetching_files" ? "Pulling latest code from repository" :
+           streamingStage === "thinking" ? "AI is analyzing the code" :
+           streamingStage === "writing" ? "Generating analysis report" :
+           "Fetching files and reviewing code"}
+        </p>
       </div>
-      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      {streamingContent ? (
+        <div className="w-full px-4">
+          <div className="flex gap-2.5">
+            <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 bg-primary/15">
+              <Sparkles className="w-3 h-3 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="rounded-md p-3 text-left prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs [&_code]:text-[11px] [&_pre]:text-[11px] [&_pre]:bg-background [&_pre]:p-2 [&_pre]:rounded bg-primary/5 border border-primary/10">
+                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+      )}
     </div>
   );
 
@@ -1062,10 +1215,10 @@ ${task.fixSteps}`;
                       variant="ghost"
                       className="h-5 px-1.5 text-[10px]"
                       onClick={(e) => { e.stopPropagation(); handleRefreshFiles(); }}
-                      disabled={discussMutation.isPending}
+                      disabled={discussMutation.isPending || isStreaming}
                       data-testid="button-refresh-files"
                     >
-                      {discussMutation.isPending ? (
+                      {(discussMutation.isPending || isStreaming) ? (
                         <Loader2 className="w-3 h-3 animate-spin" />
                       ) : (
                         <RefreshCw className="w-3 h-3" />
@@ -1108,10 +1261,10 @@ ${task.fixSteps}`;
                   variant="ghost"
                   className="h-5 text-[10px] gap-1"
                   onClick={handleRefreshFiles}
-                  disabled={discussMutation.isPending}
+                  disabled={discussMutation.isPending || isStreaming}
                   data-testid="button-refresh-files-header"
                 >
-                  {discussMutation.isPending ? (
+                  {(discussMutation.isPending || isStreaming) ? (
                     <Loader2 className="w-3 h-3 animate-spin" />
                   ) : (
                     <RefreshCw className="w-3 h-3" />
@@ -1128,7 +1281,7 @@ ${task.fixSteps}`;
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
                   </div>
-                ) : discussion.length === 0 && discussMutation.isPending && autoAnalysisTriggered ? (
+                ) : discussion.length === 0 && (discussMutation.isPending || isStreaming) && autoAnalysisTriggered ? (
                   renderAutoAnalysisLoading()
                 ) : discussion.length === 0 && autoAnalysisError ? (
                   renderAutoAnalysisError()
@@ -1141,7 +1294,7 @@ ${task.fixSteps}`;
                 ) : (
                   discussion.map((msg, i) => renderMessage(msg, i))
                 )}
-                {discussMutation.isPending && discussion.length > 0 && (
+                {isStreaming && discussion.length > 0 && (
                   <div className="flex gap-2.5">
                     <div className="w-6 h-6 rounded-full flex items-center justify-center shrink-0 bg-muted">
                       <Bot className="w-3 h-3 text-muted-foreground" />
@@ -1150,10 +1303,22 @@ ${task.fixSteps}`;
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className="text-[10px] font-medium text-muted-foreground">{currentModelInfo.label}</span>
                       </div>
-                      <div className="bg-muted rounded-md p-3 inline-flex items-center gap-2">
-                        <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground">Thinking...</span>
-                      </div>
+                      {streamingContent ? (
+                        <div className="rounded-md p-3 text-left prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs [&_code]:text-[11px] [&_pre]:text-[11px] [&_pre]:bg-background [&_pre]:p-2 [&_pre]:rounded bg-muted">
+                          <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                          <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-text-bottom" />
+                        </div>
+                      ) : (
+                        <div className="bg-muted rounded-md p-3 inline-flex items-center gap-2">
+                          <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                          <span className="text-xs text-muted-foreground">
+                            {streamingStage === "reading_context" ? "Reading task context..." :
+                             streamingStage === "fetching_files" ? "Fetching source files..." :
+                             streamingStage === "thinking" ? "Thinking..." :
+                             "Connecting..."}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1171,17 +1336,17 @@ ${task.fixSteps}`;
                   value={discussionInput}
                   onChange={(e) => setDiscussionInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  disabled={discussMutation.isPending}
+                  disabled={discussMutation.isPending || isStreaming}
                   data-testid="input-discussion"
                 />
                 <Button
                   size="icon"
                   onClick={handleSendMessage}
-                  disabled={!discussionInput.trim() || discussMutation.isPending}
+                  disabled={!discussionInput.trim() || discussMutation.isPending || isStreaming}
                   className="shrink-0"
                   data-testid="button-send-discussion"
                 >
-                  {discussMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {(discussMutation.isPending || isStreaming) ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </Button>
               </div>
               <div className="flex items-center justify-between mt-1.5">
@@ -1220,7 +1385,7 @@ ${task.fixSteps}`;
                         size="sm"
                         className="h-5 gap-1 text-[10px] text-muted-foreground hover:text-foreground px-1.5"
                         onClick={() => generateFixMutation.mutate(discussionInput.trim() || undefined)}
-                        disabled={generateFixMutation.isPending || discussMutation.isPending}
+                        disabled={generateFixMutation.isPending || discussMutation.isPending || isStreaming}
                         data-testid="button-generate-fix"
                       >
                         {generateFixMutation.isPending ? (
