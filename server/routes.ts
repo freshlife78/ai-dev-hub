@@ -3156,8 +3156,12 @@ RULES:
   app.post("/api/businesses/:bizId/manager/generate-fix", async (req, res) => {
     try {
       const bizId = req.params.bizId;
-      const { taskId, projectId, instructions, taskTitle } = req.body;
-      if (!taskId && !taskTitle) return res.status(400).json({ message: "taskId is required" });
+      const { taskId: rawTaskId, projectId: rawProjectId, instructions, taskTitle } = req.body;
+      const taskId = rawTaskId?.trim() || undefined;
+      const projectId = rawProjectId?.trim() || undefined;
+      if (!taskId && !taskTitle) {
+        return res.status(400).json({ message: "This action is missing a task reference. Please ask the manager to regenerate the code fix for a specific task." });
+      }
 
       let task = (projectId && taskId) ? await storage.getTask(projectId, taskId) : undefined;
       let resolvedProjectId = projectId;
@@ -3173,7 +3177,7 @@ RULES:
           }
         }
       }
-      if (!task) return res.status(404).json({ message: `Task not found${taskId ? ` (${taskId})` : taskTitle ? ` (${taskTitle})` : ""}` });
+      if (!task) return res.status(404).json({ message: `Task not found${taskId ? ` (${taskId})` : taskTitle ? ` (${taskTitle})` : ""}. Try asking the manager again.` });
 
       const reviewAgent = await storage.getReviewAgent(bizId);
       const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;

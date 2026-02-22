@@ -200,7 +200,7 @@ function getActionSummary(action: ManagerAction): { title: string; details: stri
       };
     case "GENERATE_CODE_FIX":
       return {
-        title: `Generate Fix for ${d.taskId || "Task"}`,
+        title: `Generate Fix for ${d.taskTitle || d.taskId || "Task"}`,
         details: [
           d.instructions ? `${d.instructions.slice(0, 120)}${d.instructions.length > 120 ? "..." : ""}` : "",
         ].filter(Boolean),
