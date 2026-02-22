@@ -240,6 +240,7 @@ function ActionCard({
         try {
           const res = await apiRequest("POST", `/api/businesses/${businessId}/manager/generate-fix`, {
             taskId: action.data.taskId,
+            taskTitle: action.data.taskTitle,
             projectId: action.data.projectId,
             instructions: action.data.instructions,
           });

@@ -2605,7 +2605,7 @@ ACTION:MOVE_TASK
 {"taskId":"TASK-001","taskTitle":"...","fromProjectId":"P1","fromProjectName":"Source Project","toProjectId":"P2","toProjectName":"Target Project","reason":"..."}
 
 ACTION:GENERATE_CODE_FIX
-{"taskId":"TASK-001","projectId":"P1","instructions":"Describe the specific code change to make"}
+{"taskId":"TASK-001","taskTitle":"Task title here","projectId":"P1","instructions":"Describe the specific code change to make"}
 
 RULES:
 - Only propose actions when you have clear justification
@@ -2617,7 +2617,7 @@ RULES:
 - If you cannot find the exact task ID for a status update, do NOT propose the action
 - For BULK_UPDATE_REPOSITORY, use ONLY real project IDs and repository IDs from the AVAILABLE lists below. This action links all unlinked tasks in a project to a specified repository.
 - For MOVE_TASK, use ONLY actual task IDs and real project IDs from the AVAILABLE lists. Include fromProjectId (the task's current project) and toProjectId (the destination project). Always provide the reason for moving.
-- For GENERATE_CODE_FIX, include the task's actual taskId, its projectId, and detailed instructions about what code change to make. Use this when the user asks you to fix, implement, or change code for a specific task.
+- For GENERATE_CODE_FIX, include the task's actual taskId, taskTitle, its projectId, and detailed instructions about what code change to make. Use this when the user asks you to fix, implement, or change code for a specific task.
 
 CRITICAL - CODE GENERATION RULE (HIGHEST PRIORITY):
 You MUST NEVER write code blocks (\`\`\`) in your responses. You CANNOT write code. You do not have that ability. The ONLY way to create code changes is through the ACTION:GENERATE_CODE_FIX action. When the user asks you to generate, fix, implement, deploy, build, create, or write anything code-related:
@@ -2710,17 +2710,51 @@ Your role is to:\n- Help prioritize work based on business impact and urgency\n-
         .map((block) => block.text)
         .join("");
 
-      const actionRegex = /ACTION:(CREATE_INBOX_ITEM|CREATE_TASK|UPDATE_TASK_STATUS|CREATE_PROJECT|BULK_UPDATE_REPOSITORY|MOVE_TASK|GENERATE_CODE_FIX)\s*\n\s*(\{[\s\S]*?\})/g;
+      const extractJsonBlock = (text: string, fromIdx: number): { json: string; endIdx: number } | null => {
+        let startIdx = fromIdx;
+        while (startIdx < text.length && /\s/.test(text[startIdx])) startIdx++;
+        if (startIdx >= text.length || text[startIdx] !== "{") return null;
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        for (let i = startIdx; i < text.length; i++) {
+          const ch = text[i];
+          if (escape) { escape = false; continue; }
+          if (ch === "\\") { escape = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === "{") depth++;
+          else if (ch === "}") { depth--; if (depth === 0) return { json: text.slice(startIdx, i + 1), endIdx: i + 1 }; }
+        }
+        return null;
+      };
+
+      const actionTypePattern = /ACTION:(CREATE_INBOX_ITEM|CREATE_TASK|UPDATE_TASK_STATUS|CREATE_PROJECT|BULK_UPDATE_REPOSITORY|MOVE_TASK|GENERATE_CODE_FIX)\s*\n\s*/g;
       const actions: ManagerAction[] = [];
+      const actionRanges: [number, number][] = [];
       let match;
-      while ((match = actionRegex.exec(responseText)) !== null) {
-        try {
-          const parsed = JSON.parse(match[2]);
-          actions.push({ type: match[1] as ManagerAction["type"], data: parsed, status: "pending" });
-        } catch {}
+      while ((match = actionTypePattern.exec(responseText)) !== null) {
+        const blockStart = match.index;
+        const afterHeader = blockStart + match[0].length;
+        const result = extractJsonBlock(responseText, afterHeader);
+        if (result) {
+          try {
+            const parsed = JSON.parse(result.json);
+            actions.push({ type: match[1] as ManagerAction["type"], data: parsed, status: "pending" });
+            actionRanges.push([blockStart, result.endIdx]);
+          } catch {
+            actionRanges.push([blockStart, afterHeader]);
+          }
+        } else {
+          actionRanges.push([blockStart, afterHeader]);
+        }
       }
 
-      const cleanContent = responseText.replace(/ACTION:(CREATE_INBOX_ITEM|CREATE_TASK|UPDATE_TASK_STATUS|CREATE_PROJECT|BULK_UPDATE_REPOSITORY|MOVE_TASK|GENERATE_CODE_FIX)\s*\n\s*\{[\s\S]*?\}/g, "").trim();
+      let cleanContent = responseText;
+      for (let i = actionRanges.length - 1; i >= 0; i--) {
+        cleanContent = cleanContent.slice(0, actionRanges[i][0]) + cleanContent.slice(actionRanges[i][1]);
+      }
+      cleanContent = cleanContent.trim();
 
       const filesLoaded = fileContents.map(f => ({ path: f.path, repo: f.repoName }));
 
@@ -3122,15 +3156,16 @@ RULES:
   app.post("/api/businesses/:bizId/manager/generate-fix", async (req, res) => {
     try {
       const bizId = req.params.bizId;
-      const { taskId, projectId, instructions } = req.body;
-      if (!taskId) return res.status(400).json({ message: "taskId is required" });
+      const { taskId, projectId, instructions, taskTitle } = req.body;
+      if (!taskId && !taskTitle) return res.status(400).json({ message: "taskId is required" });
 
-      let task = projectId ? await storage.getTask(projectId, taskId) : undefined;
+      let task = (projectId && taskId) ? await storage.getTask(projectId, taskId) : undefined;
       let resolvedProjectId = projectId;
       if (!task) {
         const allGroups = await storage.getAllTasksForBusiness(bizId);
         for (const group of allGroups) {
-          const found = group.tasks.find(t => t.id === taskId);
+          if (projectId && taskTitle && group.project.id !== projectId) continue;
+          const found = group.tasks.find(t => (taskId && t.id === taskId) || (taskTitle && t.title === taskTitle));
           if (found) {
             task = found;
             resolvedProjectId = group.project.id;
@@ -3138,7 +3173,7 @@ RULES:
           }
         }
       }
-      if (!task) return res.status(404).json({ message: "Task not found" });
+      if (!task) return res.status(404).json({ message: `Task not found${taskId ? ` (${taskId})` : taskTitle ? ` (${taskTitle})` : ""}` });
 
       const reviewAgent = await storage.getReviewAgent(bizId);
       const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
