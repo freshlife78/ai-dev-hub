@@ -3159,25 +3159,27 @@ RULES:
       const { taskId: rawTaskId, projectId: rawProjectId, instructions, taskTitle } = req.body;
       const taskId = rawTaskId?.trim() || undefined;
       const projectId = rawProjectId?.trim() || undefined;
-      if (!taskId && !taskTitle) {
-        return res.status(400).json({ message: "This action is missing a task reference. Please ask the manager to regenerate the code fix for a specific task." });
+      if (!taskId && !taskTitle && !instructions) {
+        return res.status(400).json({ message: "This action is missing a task reference and instructions. Please ask the manager to regenerate the code fix." });
       }
 
-      let task = (projectId && taskId) ? await storage.getTask(projectId, taskId) : undefined;
+      let task: any = undefined;
       let resolvedProjectId = projectId;
-      if (!task) {
-        const allGroups = await storage.getAllTasksForBusiness(bizId);
-        for (const group of allGroups) {
-          if (projectId && taskTitle && group.project.id !== projectId) continue;
-          const found = group.tasks.find(t => (taskId && t.id === taskId) || (taskTitle && t.title === taskTitle));
-          if (found) {
-            task = found;
-            resolvedProjectId = group.project.id;
-            break;
+      if (taskId || taskTitle) {
+        if (projectId && taskId) task = await storage.getTask(projectId, taskId);
+        if (!task) {
+          const allGroups = await storage.getAllTasksForBusiness(bizId);
+          for (const group of allGroups) {
+            if (projectId && taskTitle && group.project.id !== projectId) continue;
+            const found = group.tasks.find(t => (taskId && t.id === taskId) || (taskTitle && t.title === taskTitle));
+            if (found) {
+              task = found;
+              resolvedProjectId = group.project.id;
+              break;
+            }
           }
         }
       }
-      if (!task) return res.status(404).json({ message: `Task not found${taskId ? ` (${taskId})` : taskTitle ? ` (${taskTitle})` : ""}. Try asking the manager again.` });
 
       const reviewAgent = await storage.getReviewAgent(bizId);
       const apiKey = reviewAgent?.apiKey || process.env.ANTHROPIC_API_KEY;
@@ -3185,14 +3187,18 @@ RULES:
 
       // Find repo
       let repo: any = null;
-      if (task.repositoryId) repo = await storage.getRepositoryWithToken(task.repositoryId);
+      if (task?.repositoryId) repo = await storage.getRepositoryWithToken(task.repositoryId);
       if (!repo) {
         const bizRepos = await storage.getRepositoriesWithTokens(bizId);
         if (bizRepos.length >= 1) {
-          const project = await storage.getProject(bizId, resolvedProjectId);
-          repo = (project?.defaultRepositoryId
-            ? bizRepos.find(r => r.id === project.defaultRepositoryId)
-            : null) || bizRepos[0];
+          if (resolvedProjectId) {
+            const project = await storage.getProject(bizId, resolvedProjectId);
+            repo = (project?.defaultRepositoryId
+              ? bizRepos.find(r => r.id === project.defaultRepositoryId)
+              : null) || bizRepos[0];
+          } else {
+            repo = bizRepos[0];
+          }
         }
       }
       if (!repo || !repo.token || !repo.owner || !repo.repo) {
@@ -3201,14 +3207,16 @@ RULES:
 
       // Gather files from task context, instructions, and description
       const filePaths = new Set<string>();
-      if (task.filePath) filePaths.add(task.filePath);
-      const discussion = await storage.getDiscussion(resolvedProjectId, taskId);
-      for (const msg of discussion) {
-        if (msg.filesLoaded) for (const f of msg.filesLoaded) filePaths.add(f);
+      if (task?.filePath) filePaths.add(task.filePath);
+      if (task && resolvedProjectId && taskId) {
+        const discussion = await storage.getDiscussion(resolvedProjectId, taskId);
+        for (const msg of discussion) {
+          if (msg.filesLoaded) for (const f of msg.filesLoaded) filePaths.add(f);
+        }
       }
 
       // Extract file paths mentioned in instructions, description, or fixSteps
-      const allText = [instructions || "", task.description || "", task.fixSteps || ""].join(" ");
+      const allText = [instructions || "", task?.description || "", task?.fixSteps || ""].join(" ");
       const filePathPattern = /(?:^|\s|["'`(])([a-zA-Z0-9_\-./]+\.[a-zA-Z]{1,10})(?:\s|["'`),;:]|$)/g;
       let pathMatch;
       while ((pathMatch = filePathPattern.exec(allText)) !== null) {
@@ -3271,7 +3279,7 @@ RULES:
 
       // Build context with linked tasks
       let depContext = "";
-      if (task.dependencies && task.dependencies.length > 0) {
+      if (task?.dependencies && task.dependencies.length > 0) {
         const depTasks = [];
         for (const depId of task.dependencies) {
           const dt = await storage.getTask(resolvedProjectId, depId);
@@ -3284,7 +3292,9 @@ RULES:
         }
       }
 
-      const taskContext = `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`;
+      const taskContext = task
+        ? `TASK: ${task.title}\nType: ${task.type} | Status: ${task.status} | Priority: ${task.priority}\nDescription: ${task.description}\nFix Steps: ${task.fixSteps}\nReasoning: ${task.reasoning}`
+        : `TASK: ${taskTitle || "Code generation request"}\nDescription: ${instructions || "See manager instructions below"}`;
       const filesContext = fileContents.length > 0
         ? fileContents.map(f =>
             `FILE: ${f.path}\n\`\`\`\n${f.content.length > 12000 ? f.content.slice(0, 12000) + "\n[truncated]" : f.content}\n\`\`\``
@@ -3362,11 +3372,13 @@ Rules:
       }
 
       const fixId = `fix-${crypto.randomUUID().slice(0, 8)}`;
+      const effectiveTaskId = task?.id || taskId || "manager-fix";
+      const effectiveTaskTitle = task?.title || taskTitle || "Manager code generation";
       const codeFix: CodeFix = {
         id: fixId,
-        taskId: task.id,
+        taskId: effectiveTaskId,
         timestamp: new Date().toISOString(),
-        commitMessage: parsed.commitMessage || "Fix: " + task.title,
+        commitMessage: parsed.commitMessage || "Fix: " + effectiveTaskTitle,
         description: parsed.description || "",
         files: (parsed.files || []).map((f: any) => {
           const original = fileContents.find(fc => fc.path === f.path);
@@ -3383,7 +3395,7 @@ Rules:
       // Save as manager message with the code fix
       await storage.addManagerMessage(bizId, {
         sender: "manager",
-        content: `**Code Fix Generated for [${task.id}] ${task.title}**\n\n${codeFix.description}\n\n**Files:** ${codeFix.files.map((f: CodeFixFile) => f.path).join(", ")}\n**Commit:** ${codeFix.commitMessage}`,
+        content: `**Code Fix Generated for [${effectiveTaskId}] ${effectiveTaskTitle}**\n\n${codeFix.description}\n\n**Files:** ${codeFix.files.map((f: CodeFixFile) => f.path).join(", ")}\n**Commit:** ${codeFix.commitMessage}`,
         timestamp: new Date().toISOString(),
         mode: "chat",
         actions: [],
