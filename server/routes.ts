@@ -5,7 +5,11 @@ import { seedData } from "./seed";
 import { insertProjectSchema, insertTaskSchema, insertBusinessSchema, insertRepositorySchema, type InsertTask, type ManagerAction, type CodeFix, type CodeFixFile } from "@shared/schema";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Repository } from "@shared/schema";
+import { ticketsTable } from "@shared/schema";
+import { db } from "./db";
+import { eq, desc } from "drizzle-orm";
 import crypto from "crypto";
+import { triageTicket } from "./services/triageAgent";
 
 interface GitHubTreeItem {
   path: string;
@@ -3548,6 +3552,168 @@ Rules:
     if (!biz) return res.status(404).json({ message: "Business not found" });
     await storage.clearManagerDiscussion(bizId);
     res.json({ success: true });
+  });
+
+  // ── Ticket Intake API ──────────────────────────────────────────────
+
+  function checkPipelineApiKey(req: any): boolean {
+    const header = req.headers.authorization;
+    if (!header) return false;
+    const token = header.replace(/^Bearer\s+/i, "");
+    return token === process.env.AI_DEV_HUB_API_KEY;
+  }
+
+  app.post("/api/tickets", async (req, res) => {
+    if (!checkPipelineApiKey(req)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    try {
+      const {
+        reporter_type,
+        reporter_name,
+        reporter_id,
+        description,
+        page_url,
+        route_id,
+        urgency,
+        screenshot_urls,
+      } = req.body;
+
+      if (!reporter_type || !description) {
+        return res.status(400).json({ message: "reporter_type and description are required" });
+      }
+
+      const [ticket] = await db
+        .insert(ticketsTable)
+        .values({
+          reporterType: reporter_type,
+          reporterName: reporter_name || null,
+          reporterId: reporter_id || null,
+          description,
+          pageUrl: page_url || null,
+          routeId: route_id ?? null,
+          urgency: urgency || "normal",
+          screenshotUrls: screenshot_urls || [],
+          status: "open",
+        })
+        .returning();
+
+      let triage;
+      try {
+        triage = await triageTicket({
+          reporter_type,
+          reporter_name,
+          description,
+          page_url,
+        });
+      } catch (err: any) {
+        console.error("[tickets] Triage agent error:", err.message);
+        triage = {
+          lane: "ops_alert" as const,
+          urgency: urgency || "normal",
+          assigned_agent: null,
+          triage_notes: "Triage agent unavailable — defaulting to ops_alert",
+          confidence: 0,
+        };
+      }
+
+      const [updated] = await db
+        .update(ticketsTable)
+        .set({
+          lane: triage.lane,
+          urgency: triage.urgency,
+          assignedAgent: triage.assigned_agent,
+          triageNotes: triage.triage_notes,
+          triageConfidence: triage.confidence,
+          status: "working",
+          updatedAt: new Date(),
+        })
+        .where(eq(ticketsTable.id, ticket.id))
+        .returning();
+
+      res.json({
+        success: true,
+        ticket_id: updated.id,
+        status: updated.status,
+        lane: updated.lane,
+      });
+    } catch (err: any) {
+      console.error("[tickets] POST error:", err);
+      res.status(500).json({ message: err.message || "Failed to create ticket" });
+    }
+  });
+
+  app.patch("/api/tickets/:id", async (req, res) => {
+    if (!checkPipelineApiKey(req)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    try {
+      const ticketId = parseInt(req.params.id, 10);
+      if (isNaN(ticketId)) {
+        return res.status(400).json({ message: "Invalid ticket id" });
+      }
+
+      const { status, branch_name, feedback, notes } = req.body;
+
+      const updates: Record<string, any> = { updatedAt: new Date() };
+      if (status !== undefined) updates.status = status;
+      if (branch_name !== undefined) updates.branchName = branch_name;
+      if (feedback !== undefined) updates.feedback = feedback;
+      if (notes !== undefined) updates.triageNotes = notes;
+
+      const [updated] = await db
+        .update(ticketsTable)
+        .set(updates)
+        .where(eq(ticketsTable.id, ticketId))
+        .returning();
+
+      if (!updated) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[tickets] PATCH error:", err);
+      res.status(500).json({ message: err.message || "Failed to update ticket" });
+    }
+  });
+
+  app.get("/api/tickets", async (_req, res) => {
+    try {
+      const tickets = await db
+        .select()
+        .from(ticketsTable)
+        .orderBy(desc(ticketsTable.createdAt));
+      res.json(tickets);
+    } catch (err: any) {
+      console.error("[tickets] GET list error:", err);
+      res.status(500).json({ message: err.message || "Failed to fetch tickets" });
+    }
+  });
+
+  app.get("/api/tickets/:id", async (req, res) => {
+    try {
+      const ticketId = parseInt(req.params.id, 10);
+      if (isNaN(ticketId)) {
+        return res.status(400).json({ message: "Invalid ticket id" });
+      }
+
+      const [ticket] = await db
+        .select()
+        .from(ticketsTable)
+        .where(eq(ticketsTable.id, ticketId));
+
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      res.json(ticket);
+    } catch (err: any) {
+      console.error("[tickets] GET detail error:", err);
+      res.status(500).json({ message: err.message || "Failed to fetch ticket" });
+    }
   });
 
   return httpServer;

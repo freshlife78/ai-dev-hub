@@ -35,6 +35,35 @@ export async function ensureSchemaUpToDate() {
       );
       console.log("[db] Added missing column: manager_messages.code_fix");
     }
+    const ticketsExists = await client.query(
+      `SELECT to_regclass('public.tickets') AS cls`
+    );
+    if (!ticketsExists.rows[0]?.cls) {
+      await client.query(`
+        CREATE TABLE tickets (
+          id              serial PRIMARY KEY,
+          reporter_type   text NOT NULL,
+          reporter_name   text,
+          reporter_id     text,
+          lane            text,
+          urgency         text DEFAULT 'normal',
+          status          text DEFAULT 'open',
+          title           text,
+          description     text NOT NULL,
+          page_url        text,
+          route_id        integer,
+          screenshot_urls jsonb DEFAULT '[]',
+          triage_notes    text,
+          triage_confidence integer,
+          assigned_agent  text,
+          branch_name     text,
+          feedback        text,
+          created_at      timestamptz DEFAULT now(),
+          updated_at      timestamptz DEFAULT now()
+        )
+      `);
+      console.log("[db] Created table: tickets");
+    }
   } catch (err) {
     console.error("[db] Schema migration error:", err);
   } finally {

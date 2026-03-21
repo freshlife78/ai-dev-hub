@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, boolean, jsonb, serial, integer, timestamp } from "drizzle-orm/pg-core";
 
 export const agentTypeEnum = z.enum(["Claude", "ChatGPT", "Replit", "Other"]);
 
@@ -397,4 +397,26 @@ export const managerMessagesTable = pgTable("manager_messages", {
   filesLoaded: jsonb("files_loaded").$type<{ path: string; repo: string }[]>().notNull().default([]),
   attachments: jsonb("attachments").$type<{ name: string; content: string; type: string }[]>().notNull().default([]),
   codeFix: jsonb("code_fix").$type<CodeFix>(),
+});
+
+export const ticketsTable = pgTable("tickets", {
+  id: serial("id").primaryKey(),
+  reporterType: text("reporter_type").notNull(),
+  reporterName: text("reporter_name"),
+  reporterId: text("reporter_id"),
+  lane: text("lane"),
+  urgency: text("urgency").default("normal"),
+  status: text("status").default("open"),
+  title: text("title"),
+  description: text("description").notNull(),
+  pageUrl: text("page_url"),
+  routeId: integer("route_id"),
+  screenshotUrls: jsonb("screenshot_urls").$type<string[]>().default([]),
+  triageNotes: text("triage_notes"),
+  triageConfidence: integer("triage_confidence"),
+  assignedAgent: text("assigned_agent"),
+  branchName: text("branch_name"),
+  feedback: text("feedback"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
