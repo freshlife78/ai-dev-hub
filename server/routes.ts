@@ -3691,8 +3691,7 @@ Rules:
           page_url,
         });
       } catch (err: any) {
-        console.error("[triage error]", err);
-        console.error("[tickets] Triage agent error:", err.message);
+        console.error("[triage error full]", JSON.stringify(err, Object.getOwnPropertyNames(err)));
         triage = {
           lane: "ops_alert" as const,
           urgency: urgency || "normal",
@@ -4024,6 +4023,22 @@ Rules:
     } catch (err: any) {
       console.error("[inbox] pending error:", err);
       res.status(500).json({ message: err.message || "Failed to fetch pending inbox items" });
+    }
+  });
+
+  app.get("/api/test-triage", async (req, res) => {
+    try {
+      const result = await triageTicket({
+        reporter_type: "admin",
+        description: "PDF upload button broken on route detail page",
+        page_url: "/admin/routes/52",
+      });
+      res.json({ success: true, result });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        error: JSON.stringify(err, Object.getOwnPropertyNames(err)),
+      });
     }
   });
 
