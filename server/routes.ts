@@ -3691,6 +3691,7 @@ Rules:
           page_url,
         });
       } catch (err: any) {
+        console.error("[triage error]", err);
         console.error("[tickets] Triage agent error:", err.message);
         triage = {
           lane: "ops_alert" as const,
