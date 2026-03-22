@@ -59,6 +59,10 @@ Rules:
   const text =
     response.content[0].type === "text" ? response.content[0].text : "";
 
-  const result: TriageResult = JSON.parse(text);
+  const cleaned = text
+    .replace(/^```(?:json)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+    .trim();
+  const result: TriageResult = JSON.parse(cleaned);
   return result;
 }
