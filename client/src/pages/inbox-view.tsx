@@ -65,6 +65,7 @@ const statusColors: Record<string, string> = {
   Reviewed: "bg-yellow-500/10 text-yellow-400",
   Assigned: "bg-green-500/10 text-green-400",
   Dismissed: "bg-muted text-muted-foreground",
+  pending_approval: "bg-amber-500/20 text-amber-400 border border-amber-500/30",
 };
 
 interface ExtractedItem {
@@ -188,11 +189,19 @@ export default function InboxView() {
     enabled: !!bizId,
   });
 
-  const filteredItems = statusFilter === "all"
-    ? inboxItems
-    : inboxItems.filter((item) => item.status === statusFilter);
+  const filteredItems = (() => {
+    const items = statusFilter === "all"
+      ? inboxItems
+      : inboxItems.filter((item) => item.status === statusFilter);
+    return [...items].sort((a, b) => {
+      if (a.status === "pending_approval" && b.status !== "pending_approval") return -1;
+      if (b.status === "pending_approval" && a.status !== "pending_approval") return 1;
+      return 0;
+    });
+  })();
 
   const newCount = inboxItems.filter((i) => i.status === "New").length;
+  const pendingApprovalCount = inboxItems.filter((i) => i.status === "pending_approval").length;
 
   const processMutation = useMutation({
     mutationFn: async (data: { transcript: string; meetingTitle: string; meetingDate: string }) => {
@@ -415,6 +424,11 @@ export default function InboxView() {
         <div className="flex items-center gap-2">
           <Inbox className="w-4 h-4 text-muted-foreground" />
           <h2 className="text-lg font-semibold" data-testid="text-inbox-title">Inbox</h2>
+          {pendingApprovalCount > 0 && (
+            <Badge className="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/30" variant="secondary">
+              {pendingApprovalCount} pending
+            </Badge>
+          )}
           {newCount > 0 && (
             <Badge variant="secondary" className="text-xs">{newCount} new</Badge>
           )}
@@ -427,6 +441,7 @@ export default function InboxView() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="pending_approval">Pending Approval</SelectItem>
               <SelectItem value="New">New</SelectItem>
               <SelectItem value="Reviewed">Reviewed</SelectItem>
               <SelectItem value="Assigned">Assigned</SelectItem>
@@ -591,9 +606,15 @@ export default function InboxView() {
                             <span className="text-[10px] text-muted-foreground">{item.priority}</span>
                           </div>
                           <Badge className={`text-[10px] ${statusColors[item.status] || ""}`} variant="secondary">
-                            {item.status}
+                            {item.status === "pending_approval" ? "Pending approval" : item.status}
                           </Badge>
-                          <Badge variant="secondary" className="text-[10px]">{item.source}</Badge>
+                          {item.source === "cool_dispatch" ? (
+                            <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80">
+                              cool_dispatch
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-[10px]">{item.source}</Badge>
+                          )}
                         </div>
                         {item.description && (
                           <p className="text-xs text-muted-foreground mt-1">{item.description}</p>
