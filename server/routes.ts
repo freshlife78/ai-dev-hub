@@ -5,9 +5,9 @@ import { seedData } from "./seed";
 import { insertProjectSchema, insertTaskSchema, insertBusinessSchema, insertRepositorySchema, type InsertTask, type ManagerAction, type CodeFix, type CodeFixFile } from "@shared/schema";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Repository } from "@shared/schema";
-import { ticketsTable } from "@shared/schema";
+import { ticketsTable, inboxItemsTable, tasksTable, projectsTable, businessesTable } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, ne } from "drizzle-orm";
 import crypto from "crypto";
 import { triageTicket } from "./services/triageAgent";
 
@@ -3556,6 +3556,89 @@ Rules:
 
   // ── Ticket Intake API ──────────────────────────────────────────────
 
+  const laneToInboxType: Record<string, string> = {
+    software_bug: "Bug",
+    improvement: "Feature",
+    ops_alert: "Alert",
+    knowledge_update: "Docs",
+  };
+
+  const urgencyToPriority: Record<string, string> = {
+    critical: "High",
+    normal: "Medium",
+  };
+
+  interface DuplicateCheckResult {
+    hasDuplicate: boolean;
+    duplicateTaskId: string | null;
+    similarity: number;
+    recommendation: "new_task" | "enrich_existing" | "likely_duplicate";
+    reasoning: string;
+  }
+
+  async function detectDuplicates(
+    description: string,
+    tasks: { id: string; title: string; description: string }[],
+  ): Promise<DuplicateCheckResult> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey || tasks.length === 0) {
+      return { hasDuplicate: false, duplicateTaskId: null, similarity: 0, recommendation: "new_task", reasoning: "No tasks to compare or API key missing" };
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+    const taskList = tasks.map((t) => `- [${t.id}] ${t.title}: ${t.description.slice(0, 200)}`).join("\n");
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 500,
+      system: "You are a duplicate ticket detector. Return ONLY valid JSON, no markdown.",
+      messages: [{
+        role: "user",
+        content: `New ticket description:\n${description}\n\nExisting open tasks:\n${taskList}\n\nReturn JSON:\n{"hasDuplicate":boolean,"duplicateTaskId":string|null,"similarity":0-100,"recommendation":"new_task"|"enrich_existing"|"likely_duplicate","reasoning":"one sentence"}`,
+      }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    return JSON.parse(text);
+  }
+
+  async function suggestProject(
+    description: string,
+    lane: string,
+    projects: { id: string; name: string; description: string }[],
+  ): Promise<string | null> {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey || projects.length === 0) return null;
+
+    const anthropic = new Anthropic({ apiKey });
+    const projectList = projects.map((p) => `- [${p.id}] ${p.name}: ${p.description.slice(0, 200)}`).join("\n");
+
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 200,
+      system: "You are a project classifier. Return ONLY valid JSON, no markdown.",
+      messages: [{
+        role: "user",
+        content: `Ticket lane: ${lane}\nTicket description:\n${description}\n\nAvailable projects:\n${projectList}\n\nReturn JSON: {"projectId":"the best matching project id","reasoning":"one sentence"}`,
+      }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    const parsed = JSON.parse(text);
+    return parsed.projectId || null;
+  }
+
+  function generateApprovalTaskId(type: string, existingTasks: { id: string }[]): string {
+    const typeToTaskType = type === "Alert" ? "Bug" : type === "Docs" ? "Task" : type;
+    const prefix = typeToTaskType === "Bug" ? "BUG" : typeToTaskType === "Feature" ? "FEAT" : "ARCH";
+    const existing = existingTasks
+      .filter((t) => t.id.startsWith(prefix + "-"))
+      .map((t) => parseInt(t.id.split("-")[1], 10))
+      .filter((n) => !isNaN(n));
+    const next = existing.length > 0 ? Math.max(...existing) + 1 : 1;
+    return `${prefix}-${String(next).padStart(3, "0")}`;
+  }
+
   function checkPipelineApiKey(req: any): boolean {
     const header = req.headers.authorization;
     if (!header) return false;
@@ -3618,7 +3701,8 @@ Rules:
         };
       }
 
-      const [updated] = await db
+      // Save triage results on the ticket (stays "open" until approved)
+      await db
         .update(ticketsTable)
         .set({
           lane: triage.lane,
@@ -3626,17 +3710,85 @@ Rules:
           assignedAgent: triage.assigned_agent,
           triageNotes: triage.triage_notes,
           triageConfidence: triage.confidence,
-          status: "working",
+          title: triage.triage_notes?.slice(0, 80) || description.slice(0, 80),
           updatedAt: new Date(),
         })
-        .where(eq(ticketsTable.id, ticket.id))
-        .returning();
+        .where(eq(ticketsTable.id, ticket.id));
+
+      // Get the first business (Cool Dispatch)
+      const [firstBusiness] = await db.select().from(businessesTable).limit(1);
+      if (!firstBusiness) {
+        return res.status(500).json({ message: "No business configured" });
+      }
+
+      // Get open tasks + projects for duplicate detection and project suggestion
+      const openTasks = await db
+        .select({ id: tasksTable.id, title: tasksTable.title, description: tasksTable.description })
+        .from(tasksTable)
+        .where(ne(tasksTable.status, "Done"))
+        .limit(30);
+
+      const projects = await db
+        .select({ id: projectsTable.id, name: projectsTable.name, description: projectsTable.description })
+        .from(projectsTable)
+        .where(eq(projectsTable.businessId, firstBusiness.id));
+
+      // Run duplicate detection + project suggestion in parallel
+      let duplicateCheck: DuplicateCheckResult = {
+        hasDuplicate: false, duplicateTaskId: null, similarity: 0,
+        recommendation: "new_task", reasoning: "Detection skipped",
+      };
+      let suggestedProjectId: string | null = null;
+
+      try {
+        const [dupResult, projResult] = await Promise.all([
+          detectDuplicates(description, openTasks),
+          suggestProject(description, triage.lane, projects),
+        ]);
+        duplicateCheck = dupResult;
+        suggestedProjectId = projResult;
+      } catch (err: any) {
+        console.error("[tickets] AI analysis error:", err.message);
+      }
+
+      const ticketTitle = triage.triage_notes?.slice(0, 80) || description.slice(0, 80);
+      const inboxType = laneToInboxType[triage.lane] || "Bug";
+      const inboxPriority = urgencyToPriority[triage.urgency] || "Medium";
+
+      const notesJson = JSON.stringify({
+        ticketId: ticket.id,
+        pageUrl: page_url || null,
+        routeId: route_id ?? null,
+        assignedAgent: triage.assigned_agent,
+        triageConfidence: triage.confidence,
+        suggestedProject: suggestedProjectId,
+        duplicateCheck,
+      });
+
+      const inboxId = crypto.randomUUID();
+      await db.insert(inboxItemsTable).values({
+        id: inboxId,
+        businessId: firstBusiness.id,
+        title: ticketTitle,
+        type: inboxType,
+        source: "cool_dispatch",
+        description: `${description}\n\n---\nTriage: ${triage.triage_notes}`,
+        priority: inboxPriority,
+        status: "pending_approval",
+        dateReceived: new Date().toISOString(),
+        linkedProjectId: null,
+        linkedTaskId: null,
+        notes: notesJson,
+      });
 
       res.json({
         success: true,
-        ticket_id: updated.id,
-        status: updated.status,
-        lane: updated.lane,
+        ticket_id: ticket.id,
+        inbox_item_id: inboxId,
+        status: "pending_approval",
+        lane: triage.lane,
+        duplicateCheck,
+        suggestedProject: suggestedProjectId,
       });
     } catch (err: any) {
       console.error("[tickets] POST error:", err);
@@ -3713,6 +3865,164 @@ Rules:
     } catch (err: any) {
       console.error("[tickets] GET detail error:", err);
       res.status(500).json({ message: err.message || "Failed to fetch ticket" });
+    }
+  });
+
+  // ── Ticket Approval ─────────────────────────────────────────────────
+
+  app.post("/api/tickets/:id/approve", async (req, res) => {
+    if (!checkPipelineApiKey(req)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    try {
+      const ticketId = parseInt(req.params.id, 10);
+      if (isNaN(ticketId)) {
+        return res.status(400).json({ message: "Invalid ticket id" });
+      }
+
+      const { action, targetTaskId, projectId } = req.body;
+      if (!action || !["approve", "merge", "reject"].includes(action)) {
+        return res.status(400).json({ message: "action must be approve, merge, or reject" });
+      }
+
+      const [ticket] = await db
+        .select()
+        .from(ticketsTable)
+        .where(eq(ticketsTable.id, ticketId));
+      if (!ticket) {
+        return res.status(404).json({ message: "Ticket not found" });
+      }
+
+      // Find the linked inbox item by ticketId in notes JSON
+      const allInboxRows = await db.select().from(inboxItemsTable).where(eq(inboxItemsTable.status, "pending_approval"));
+      const inboxItem = allInboxRows.find((row) => {
+        try {
+          const notes = JSON.parse(row.notes || "{}");
+          return notes.ticketId === ticketId;
+        } catch { return false; }
+      });
+      if (!inboxItem) {
+        return res.status(404).json({ message: "No pending inbox item found for this ticket" });
+      }
+
+      const [firstBusiness] = await db.select().from(businessesTable).limit(1);
+      const bizId = firstBusiness?.id || inboxItem.businessId;
+      let notes: any = {};
+      try { notes = JSON.parse(inboxItem.notes || "{}"); } catch {}
+
+      if (action === "approve") {
+        const resolvedProjectId = projectId || notes.suggestedProject;
+        if (!resolvedProjectId) {
+          return res.status(400).json({ message: "No projectId provided and no suggestedProject available" });
+        }
+
+        const existingTasks = await db
+          .select()
+          .from(tasksTable)
+          .where(eq(tasksTable.projectId, resolvedProjectId));
+
+        const taskId = generateApprovalTaskId(inboxItem.type, existingTasks);
+
+        await db.insert(tasksTable).values({
+          id: taskId,
+          projectId: resolvedProjectId,
+          type: inboxItem.type === "Alert" ? "Bug" : inboxItem.type === "Docs" ? "Task" : (inboxItem.type as string),
+          status: "Open",
+          priority: inboxItem.priority,
+          title: inboxItem.title,
+          description: `${inboxItem.description}\n\nPage: ${notes.pageUrl || "N/A"}\nRoute: ${notes.routeId || "N/A"}`,
+          reasoning: ticket.triageNotes || "",
+          fixSteps: "",
+          replitPrompt: "",
+          filePath: "",
+          discussion: [],
+          autoAnalysisComplete: false,
+          generatedPrompts: [],
+          dependencies: [],
+        });
+
+        await db.update(inboxItemsTable).set({
+          status: "approved",
+          linkedProjectId: resolvedProjectId,
+          linkedTaskId: taskId,
+        }).where(eq(inboxItemsTable.id, inboxItem.id));
+
+        await db.update(ticketsTable).set({
+          status: "working",
+          updatedAt: new Date(),
+        }).where(eq(ticketsTable.id, ticketId));
+
+        return res.json({ success: true, taskId, projectId: resolvedProjectId });
+      }
+
+      if (action === "merge") {
+        if (!targetTaskId) {
+          return res.status(400).json({ message: "targetTaskId is required for merge" });
+        }
+
+        const [existingTask] = await db
+          .select()
+          .from(tasksTable)
+          .where(eq(tasksTable.id, targetTaskId));
+        if (!existingTask) {
+          return res.status(404).json({ message: "Target task not found" });
+        }
+
+        const appendText = `\n\n---\nAdditional report (TKT-${ticketId}, ${new Date().toISOString().split("T")[0]}):\n${ticket.description}\nPage: ${ticket.pageUrl || "N/A"}`;
+        const updates: Record<string, any> = {
+          description: existingTask.description + appendText,
+        };
+        if (ticket.urgency === "critical" && existingTask.priority !== "High") {
+          updates.priority = "High";
+        }
+
+        await db.update(tasksTable).set(updates).where(eq(tasksTable.id, targetTaskId));
+
+        await db.update(inboxItemsTable).set({
+          status: "merged",
+          linkedTaskId: targetTaskId,
+        }).where(eq(inboxItemsTable.id, inboxItem.id));
+
+        await db.update(ticketsTable).set({
+          status: "working",
+          updatedAt: new Date(),
+        }).where(eq(ticketsTable.id, ticketId));
+
+        return res.json({ success: true, taskId: targetTaskId, enriched: true });
+      }
+
+      // action === "reject"
+      await db.update(inboxItemsTable).set({ status: "rejected" }).where(eq(inboxItemsTable.id, inboxItem.id));
+      await db.update(ticketsTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(ticketsTable.id, ticketId));
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("[tickets] approve error:", err);
+      res.status(500).json({ message: err.message || "Failed to process approval" });
+    }
+  });
+
+  // ── Inbox Pending ───────────────────────────────────────────────────
+
+  app.get("/api/inbox/pending", async (_req, res) => {
+    try {
+      const rows = await db
+        .select()
+        .from(inboxItemsTable)
+        .where(eq(inboxItemsTable.status, "pending_approval"))
+        .orderBy(desc(inboxItemsTable.dateReceived));
+
+      const items = rows.map((row) => {
+        let parsedNotes: any = {};
+        try { parsedNotes = JSON.parse(row.notes || "{}"); } catch {}
+        return { ...row, parsedNotes };
+      });
+
+      res.json(items);
+    } catch (err: any) {
+      console.error("[inbox] pending error:", err);
+      res.status(500).json({ message: err.message || "Failed to fetch pending inbox items" });
     }
   });
 
