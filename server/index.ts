@@ -25,6 +25,24 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// CORS: allow Cool Dispatch and local dev origins
+app.use((req, res, next) => {
+  const allowed = [
+    'https://cooldispatch.replit.app',
+    'http://localhost:5000',
+    'http://localhost:3000'
+  ];
+  const origin = req.headers.origin;
+  if (origin && (allowed.includes(origin) || origin.endsWith('.replit.app'))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 500,
