@@ -744,6 +744,8 @@ export default function InboxView() {
               <SelectItem value="Reviewed">Reviewed</SelectItem>
               <SelectItem value="Assigned">Assigned</SelectItem>
               <SelectItem value="Dismissed">Dismissed</SelectItem>
+              <SelectItem value="approved">Approved</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
             </SelectContent>
           </Select>
           <Button
