@@ -157,6 +157,7 @@ interface CoolDispatchParsed {
   hasDuplicate: boolean;
   duplicateReasoning: string;
   suggestedProject: string;
+  assignedAgent: string;
   ticketId: number | null;
 }
 
@@ -181,34 +182,58 @@ function parseCoolDispatchItem(item: InboxItem): CoolDispatchParsed {
     hasDuplicate: notes.duplicateCheck?.hasDuplicate ?? false,
     duplicateReasoning: notes.duplicateCheck?.reasoning || "",
     suggestedProject: notes.suggestedProject || "",
+    assignedAgent: notes.assignedAgent || "",
     ticketId: notes.ticketId ?? null,
   };
 }
 
+interface ApproveOverrides {
+  projectId: string;
+  agentOverride: string;
+  priorityOverride: string;
+  titleOverride: string;
+  descriptionOverride: string;
+}
+
 function CoolDispatchPendingCard({
   item,
-  bizId,
-  onAction,
+  projects,
+  onApprove,
+  onReject,
+  onMerge,
   isPending,
 }: {
   item: InboxItem;
-  bizId: string;
-  onAction: (action: "approve" | "reject" | "merge") => void;
+  projects: Project[];
+  onApprove: (overrides: ApproveOverrides) => void;
+  onReject: () => void;
+  onMerge: () => void;
   isPending: boolean;
 }) {
   const parsed = parseCoolDispatchItem(item);
+
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [title, setTitle] = useState(item.title);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [description, setDescription] = useState(parsed.actualDescription);
+  const [lane, setLane] = useState(item.type || "Bug");
+  const [priority, setPriority] = useState(item.priority || "Medium");
+  const [agent, setAgent] = useState(parsed.assignedAgent || "");
+  const [projectId, setProjectId] = useState(parsed.suggestedProject || "");
+
+  const handleApprove = () => {
+    onApprove({ projectId, agentOverride: agent, priorityOverride: priority, titleOverride: title, descriptionOverride: description });
+  };
 
   return (
     <Card
       className="p-4 border-amber-500/30 bg-amber-500/5"
       data-testid={`inbox-item-${item.id}`}
     >
-      <div className="space-y-3">
+      <div className="space-y-4">
+        {/* Header badges + date */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-sm" data-testid={`text-inbox-title-${item.id}`}>
-              {item.title}
-            </span>
             <Badge className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30" variant="secondary">
               Pending approval
             </Badge>
@@ -221,33 +246,140 @@ function CoolDispatchPendingCard({
           </span>
         </div>
 
-        {parsed.actualDescription && (
-          <p className="text-xs text-foreground/80">{parsed.actualDescription}</p>
-        )}
+        {/* TOP: editable title + description */}
+        <div className="space-y-2">
+          {editingTitle ? (
+            <Input
+              className="text-sm font-semibold h-7"
+              value={title}
+              autoFocus
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(e) => { if (e.key === "Enter") setEditingTitle(false); }}
+              data-testid={`input-title-${item.id}`}
+            />
+          ) : (
+            <p
+              className="font-semibold text-sm cursor-pointer hover:text-amber-300 transition-colors"
+              onClick={() => setEditingTitle(true)}
+              title="Click to edit title"
+              data-testid={`text-inbox-title-${item.id}`}
+            >
+              {title}
+            </p>
+          )}
 
-        <p className="text-[11px] text-muted-foreground">
-          {parsed.pageUrl && <>Page: <span className="font-mono">{parsed.pageUrl}</span></>}
-          {parsed.pageUrl && parsed.triageConfidence !== null && " · "}
-          {parsed.triageConfidence !== null && <>Confidence: {parsed.triageConfidence}%</>}
-        </p>
+          {editingDesc ? (
+            <Textarea
+              className="text-xs min-h-[72px] resize-none"
+              value={description}
+              autoFocus
+              onChange={(e) => setDescription(e.target.value)}
+              onBlur={() => setEditingDesc(false)}
+              data-testid={`textarea-desc-${item.id}`}
+            />
+          ) : (
+            <p
+              className="text-xs text-foreground/80 cursor-pointer hover:text-foreground transition-colors"
+              onClick={() => setEditingDesc(true)}
+              title="Click to edit description"
+            >
+              {description || <span className="italic text-muted-foreground">No description — click to add</span>}
+            </p>
+          )}
 
-        {parsed.triageNote && (
-          <p className="text-[11px] italic text-muted-foreground">Triage: {parsed.triageNote}</p>
-        )}
+          {parsed.pageUrl && (
+            <p className="text-[11px] text-muted-foreground font-mono">Page: {parsed.pageUrl}</p>
+          )}
+        </div>
 
-        {parsed.hasDuplicate && (
+        {/* TRIAGE PROPOSAL: editable dropdowns */}
+        <div className="space-y-2 rounded-md border border-border p-3 bg-muted/30">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">Triage proposal</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Lane</label>
+              <Select value={lane} onValueChange={setLane}>
+                <SelectTrigger className="h-7 text-xs" data-testid={`select-lane-${item.id}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Bug">Bug</SelectItem>
+                  <SelectItem value="Improvement">Improvement</SelectItem>
+                  <SelectItem value="Alert">Alert</SelectItem>
+                  <SelectItem value="Knowledge">Knowledge</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Priority</label>
+              <Select value={priority} onValueChange={setPriority}>
+                <SelectTrigger className="h-7 text-xs" data-testid={`select-priority-${item.id}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="High">High</SelectItem>
+                  <SelectItem value="Medium">Medium</SelectItem>
+                  <SelectItem value="Low">Low</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Assigned agent</label>
+              <Select value={agent || "manual"} onValueChange={(v) => setAgent(v === "manual" ? "" : v)}>
+                <SelectTrigger className="h-7 text-xs" data-testid={`select-agent-${item.id}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="claude_code">Claude Code</SelectItem>
+                  <SelectItem value="cursor_opus">Cursor + Opus</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-1">Project</label>
+              <Select value={projectId} onValueChange={setProjectId}>
+                <SelectTrigger className="h-7 text-xs" data-testid={`select-project-${item.id}`}>
+                  <SelectValue placeholder="Select project…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            {parsed.triageConfidence !== null && (
+              <span className="text-[10px] text-muted-foreground">Confidence: {parsed.triageConfidence}%</span>
+            )}
+          </div>
+          {parsed.triageNote && (
+            <p className="text-[11px] italic text-muted-foreground">"{parsed.triageNote}"</p>
+          )}
+        </div>
+
+        {/* DUPLICATE CHECK */}
+        {parsed.hasDuplicate ? (
           <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md p-2.5">
             <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
             <p className="text-[11px] text-amber-300">{parsed.duplicateReasoning}</p>
           </div>
+        ) : (
+          <p className="text-[11px] text-green-400 flex items-center gap-1">
+            <CheckCircle className="w-3 h-3" /> No duplicates found
+          </p>
         )}
 
+        {/* ACTION BUTTONS */}
         <div className="flex items-center gap-2 pt-1">
           <Button
             size="sm"
             className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
-            onClick={() => onAction("approve")}
-            disabled={isPending}
+            onClick={handleApprove}
+            disabled={isPending || !projectId}
             data-testid={`button-approve-${item.id}`}
           >
             {isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
@@ -258,7 +390,7 @@ function CoolDispatchPendingCard({
               size="sm"
               variant="outline"
               className="h-7 text-xs"
-              onClick={() => onAction("merge")}
+              onClick={onMerge}
               disabled={isPending}
               data-testid={`button-merge-${item.id}`}
             >
@@ -270,7 +402,7 @@ function CoolDispatchPendingCard({
             size="sm"
             variant="ghost"
             className="h-7 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
-            onClick={() => onAction("reject")}
+            onClick={onReject}
             disabled={isPending}
             data-testid={`button-reject-${item.id}`}
           >
@@ -423,8 +555,9 @@ export default function InboxView() {
   const [pendingActionItemId, setPendingActionItemId] = useState<string | null>(null);
 
   const ticketActionMutation = useMutation({
-    mutationFn: async ({ inboxItemId, action }: { inboxItemId: string; action: "approve" | "reject" | "merge" }) => {
-      const res = await apiRequest("POST", `/api/businesses/${bizId}/inbox/${inboxItemId}/ticket-action`, { action });
+    mutationFn: async ({ inboxItemId, action, overrides }: { inboxItemId: string; action: "approve" | "reject" | "merge"; overrides?: ApproveOverrides }) => {
+      const body: Record<string, any> = { action, ...overrides };
+      const res = await apiRequest("POST", `/api/businesses/${bizId}/inbox/${inboxItemId}/ticket-action`, body);
       return res.json();
     },
     onSuccess: (_data, variables) => {
@@ -755,10 +888,18 @@ export default function InboxView() {
                     <CoolDispatchPendingCard
                       key={item.id}
                       item={item}
-                      bizId={bizId!}
-                      onAction={(action) => {
+                      projects={projects}
+                      onApprove={(overrides) => {
                         setPendingActionItemId(item.id);
-                        ticketActionMutation.mutate({ inboxItemId: item.id, action });
+                        ticketActionMutation.mutate({ inboxItemId: item.id, action: "approve", overrides });
+                      }}
+                      onReject={() => {
+                        setPendingActionItemId(item.id);
+                        ticketActionMutation.mutate({ inboxItemId: item.id, action: "reject" });
+                      }}
+                      onMerge={() => {
+                        setPendingActionItemId(item.id);
+                        ticketActionMutation.mutate({ inboxItemId: item.id, action: "merge" });
                       }}
                       isPending={pendingActionItemId === item.id && ticketActionMutation.isPending}
                     />

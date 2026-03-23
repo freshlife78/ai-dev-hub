@@ -4030,7 +4030,7 @@ Rules:
   app.post("/api/businesses/:bizId/inbox/:inboxItemId/ticket-action", async (req, res) => {
     try {
       const { inboxItemId } = req.params;
-      const { action, targetTaskId } = req.body;
+      const { action, targetTaskId, projectId: projectIdOverride, agentOverride, priorityOverride, titleOverride, descriptionOverride } = req.body;
       if (!action || !["approve", "reject", "merge"].includes(action)) {
         return res.status(400).json({ message: "action must be approve, reject, or merge" });
       }
@@ -4049,10 +4049,20 @@ Rules:
       const ticketId = notes.ticketId ? parseInt(String(notes.ticketId), 10) : null;
 
       if (action === "approve") {
-        const resolvedProjectId = notes.suggestedProject;
+        const resolvedProjectId = projectIdOverride || notes.suggestedProject;
         if (!resolvedProjectId) {
-          return res.status(400).json({ message: "No suggestedProject in notes" });
+          return res.status(400).json({ message: "No suggestedProject in notes and no projectId provided" });
         }
+
+        const resolvedTitle = titleOverride || inboxItem.title;
+        const resolvedPriority = priorityOverride || inboxItem.priority;
+        const rawDescription = descriptionOverride || inboxItem.description || "";
+        const resolvedDescription = `${rawDescription}\n\nPage: ${notes.pageUrl || "N/A"}`;
+        const resolvedType = (() => {
+          if (inboxItem.type === "Alert") return "Bug";
+          if (inboxItem.type === "Docs") return "Task";
+          return inboxItem.type as string;
+        })();
 
         const existingTasks = await db
           .select()
@@ -4064,11 +4074,11 @@ Rules:
         await db.insert(tasksTable).values({
           id: taskId,
           projectId: resolvedProjectId,
-          type: inboxItem.type === "Alert" ? "Bug" : inboxItem.type === "Docs" ? "Task" : (inboxItem.type as string),
+          type: resolvedType,
           status: "Open",
-          priority: inboxItem.priority,
-          title: inboxItem.title,
-          description: `${inboxItem.description}\n\nPage: ${notes.pageUrl || "N/A"}`,
+          priority: resolvedPriority,
+          title: resolvedTitle,
+          description: resolvedDescription,
           reasoning: notes.triageNotes || "",
           fixSteps: "",
           replitPrompt: "",
