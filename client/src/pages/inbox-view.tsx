@@ -44,6 +44,10 @@ import {
   Link2,
   Eye,
   EyeOff,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  GitMerge,
 } from "lucide-react";
 import type { InboxItem, Project, Task } from "@shared/schema";
 
@@ -138,6 +142,140 @@ function ExtractedItemCard({
             data-testid="button-dismiss-extracted"
           >
             <X className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+interface CoolDispatchParsed {
+  actualDescription: string;
+  triageNote: string;
+  pageUrl: string;
+  triageConfidence: number | null;
+  hasDuplicate: boolean;
+  duplicateReasoning: string;
+  suggestedProject: string;
+  ticketId: number | null;
+}
+
+function parseCoolDispatchItem(item: InboxItem): CoolDispatchParsed {
+  const sep = "\n\n---\nTriage:";
+  const sepIdx = item.description?.indexOf(sep) ?? -1;
+  const actualDescription = sepIdx >= 0
+    ? (item.description ?? "").slice(0, sepIdx).trim()
+    : (item.description ?? "");
+  const triageNote = sepIdx >= 0
+    ? (item.description ?? "").slice(sepIdx + sep.length).trim()
+    : "";
+
+  let notes: any = {};
+  try { notes = JSON.parse(item.notes || "{}"); } catch {}
+
+  return {
+    actualDescription,
+    triageNote,
+    pageUrl: notes.pageUrl || "",
+    triageConfidence: notes.triageConfidence ?? null,
+    hasDuplicate: notes.duplicateCheck?.hasDuplicate ?? false,
+    duplicateReasoning: notes.duplicateCheck?.reasoning || "",
+    suggestedProject: notes.suggestedProject || "",
+    ticketId: notes.ticketId ?? null,
+  };
+}
+
+function CoolDispatchPendingCard({
+  item,
+  bizId,
+  onAction,
+  isPending,
+}: {
+  item: InboxItem;
+  bizId: string;
+  onAction: (action: "approve" | "reject" | "merge") => void;
+  isPending: boolean;
+}) {
+  const parsed = parseCoolDispatchItem(item);
+
+  return (
+    <Card
+      className="p-4 border-amber-500/30 bg-amber-500/5"
+      data-testid={`inbox-item-${item.id}`}
+    >
+      <div className="space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-sm" data-testid={`text-inbox-title-${item.id}`}>
+              {item.title}
+            </span>
+            <Badge className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30" variant="secondary">
+              Pending approval
+            </Badge>
+            <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400/80">
+              cool_dispatch
+            </Badge>
+          </div>
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {new Date(item.dateReceived).toLocaleDateString()}
+          </span>
+        </div>
+
+        {parsed.actualDescription && (
+          <p className="text-xs text-foreground/80">{parsed.actualDescription}</p>
+        )}
+
+        <p className="text-[11px] text-muted-foreground">
+          {parsed.pageUrl && <>Page: <span className="font-mono">{parsed.pageUrl}</span></>}
+          {parsed.pageUrl && parsed.triageConfidence !== null && " · "}
+          {parsed.triageConfidence !== null && <>Confidence: {parsed.triageConfidence}%</>}
+        </p>
+
+        {parsed.triageNote && (
+          <p className="text-[11px] italic text-muted-foreground">Triage: {parsed.triageNote}</p>
+        )}
+
+        {parsed.hasDuplicate && (
+          <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md p-2.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-300">{parsed.duplicateReasoning}</p>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 pt-1">
+          <Button
+            size="sm"
+            className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white"
+            onClick={() => onAction("approve")}
+            disabled={isPending}
+            data-testid={`button-approve-${item.id}`}
+          >
+            {isPending ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle className="w-3 h-3 mr-1" />}
+            Approve
+          </Button>
+          {parsed.hasDuplicate && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => onAction("merge")}
+              disabled={isPending}
+              data-testid={`button-merge-${item.id}`}
+            >
+              <GitMerge className="w-3 h-3 mr-1" />
+              Merge into existing
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs text-red-400 hover:text-red-300 hover:bg-red-500/10"
+            onClick={() => onAction("reject")}
+            disabled={isPending}
+            data-testid={`button-reject-${item.id}`}
+          >
+            <XCircle className="w-3 h-3 mr-1" />
+            Reject
           </Button>
         </div>
       </div>
@@ -279,6 +417,31 @@ export default function InboxView() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", bizId, "inbox"] });
       toast({ title: "Item removed from inbox" });
+    },
+  });
+
+  const [pendingActionItemId, setPendingActionItemId] = useState<string | null>(null);
+
+  const ticketActionMutation = useMutation({
+    mutationFn: async ({ inboxItemId, action }: { inboxItemId: string; action: "approve" | "reject" | "merge" }) => {
+      const res = await apiRequest("POST", `/api/businesses/${bizId}/inbox/${inboxItemId}/ticket-action`, { action });
+      return res.json();
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", bizId, "inbox"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", bizId, "tasks"] });
+      if (variables.action === "approve") {
+        toast({ title: "Task created", description: "Ticket approved and task added to project." });
+      } else if (variables.action === "merge") {
+        toast({ title: "Merged into existing task" });
+      } else {
+        toast({ title: "Ticket rejected" });
+      }
+      setPendingActionItemId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Action failed", description: err.message, variant: "destructive" });
+      setPendingActionItemId(null);
     },
   });
 
@@ -587,6 +750,21 @@ export default function InboxView() {
           ) : (
             <div className="space-y-2">
               {filteredItems.map((item) => {
+                if (item.source === "cool_dispatch" && item.status === "pending_approval") {
+                  return (
+                    <CoolDispatchPendingCard
+                      key={item.id}
+                      item={item}
+                      bizId={bizId!}
+                      onAction={(action) => {
+                        setPendingActionItemId(item.id);
+                        ticketActionMutation.mutate({ inboxItemId: item.id, action });
+                      }}
+                      isPending={pendingActionItemId === item.id && ticketActionMutation.isPending}
+                    />
+                  );
+                }
+
                 const typeInfo = typeConfig[item.type] || typeConfig.Idea;
                 const priorityInfo = priorityConfig[item.priority] || priorityConfig.Medium;
                 const TypeIcon = typeInfo.icon;

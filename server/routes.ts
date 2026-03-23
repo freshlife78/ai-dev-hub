@@ -4026,6 +4026,101 @@ Rules:
     }
   });
 
+  // UI-accessible ticket action (no API key required — session-authenticated internal UI)
+  app.post("/api/businesses/:bizId/inbox/:inboxItemId/ticket-action", async (req, res) => {
+    try {
+      const { inboxItemId } = req.params;
+      const { action, targetTaskId } = req.body;
+      if (!action || !["approve", "reject", "merge"].includes(action)) {
+        return res.status(400).json({ message: "action must be approve, reject, or merge" });
+      }
+
+      const [inboxItem] = await db
+        .select()
+        .from(inboxItemsTable)
+        .where(eq(inboxItemsTable.id, inboxItemId));
+      if (!inboxItem) {
+        return res.status(404).json({ message: "Inbox item not found" });
+      }
+
+      let notes: any = {};
+      try { notes = JSON.parse(inboxItem.notes || "{}"); } catch {}
+
+      const ticketId = notes.ticketId ? parseInt(String(notes.ticketId), 10) : null;
+
+      if (action === "approve") {
+        const resolvedProjectId = notes.suggestedProject;
+        if (!resolvedProjectId) {
+          return res.status(400).json({ message: "No suggestedProject in notes" });
+        }
+
+        const existingTasks = await db
+          .select()
+          .from(tasksTable)
+          .where(eq(tasksTable.projectId, resolvedProjectId));
+
+        const taskId = generateApprovalTaskId(inboxItem.type, existingTasks);
+
+        await db.insert(tasksTable).values({
+          id: taskId,
+          projectId: resolvedProjectId,
+          type: inboxItem.type === "Alert" ? "Bug" : inboxItem.type === "Docs" ? "Task" : (inboxItem.type as string),
+          status: "Open",
+          priority: inboxItem.priority,
+          title: inboxItem.title,
+          description: `${inboxItem.description}\n\nPage: ${notes.pageUrl || "N/A"}`,
+          reasoning: notes.triageNotes || "",
+          fixSteps: "",
+          replitPrompt: "",
+          filePath: "",
+          discussion: [],
+          autoAnalysisComplete: false,
+          generatedPrompts: [],
+          dependencies: [],
+        });
+
+        await db.update(inboxItemsTable).set({
+          status: "approved",
+          linkedProjectId: resolvedProjectId,
+          linkedTaskId: taskId,
+        }).where(eq(inboxItemsTable.id, inboxItemId));
+
+        if (ticketId) {
+          await db.update(ticketsTable).set({ status: "working", updatedAt: new Date() }).where(eq(ticketsTable.id, ticketId));
+        }
+
+        return res.json({ success: true, taskId, projectId: resolvedProjectId });
+      }
+
+      if (action === "merge") {
+        if (!targetTaskId) {
+          return res.status(400).json({ message: "targetTaskId is required for merge" });
+        }
+        const [existingTask] = await db.select().from(tasksTable).where(eq(tasksTable.id, targetTaskId));
+        if (!existingTask) {
+          return res.status(404).json({ message: "Target task not found" });
+        }
+        const appendText = `\n\n---\nAdditional report (${new Date().toISOString().split("T")[0]}):\n${inboxItem.description}\nPage: ${notes.pageUrl || "N/A"}`;
+        await db.update(tasksTable).set({ description: existingTask.description + appendText }).where(eq(tasksTable.id, targetTaskId));
+        await db.update(inboxItemsTable).set({ status: "merged", linkedTaskId: targetTaskId }).where(eq(inboxItemsTable.id, inboxItemId));
+        if (ticketId) {
+          await db.update(ticketsTable).set({ status: "working", updatedAt: new Date() }).where(eq(ticketsTable.id, ticketId));
+        }
+        return res.json({ success: true, taskId: targetTaskId });
+      }
+
+      // reject
+      await db.update(inboxItemsTable).set({ status: "rejected" }).where(eq(inboxItemsTable.id, inboxItemId));
+      if (ticketId) {
+        await db.update(ticketsTable).set({ status: "rejected", updatedAt: new Date() }).where(eq(ticketsTable.id, ticketId));
+      }
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("[inbox] ticket-action error:", err);
+      res.status(500).json({ message: err.message || "Failed to process action" });
+    }
+  });
+
   app.get("/api/test-triage", async (req, res) => {
     try {
       const result = await triageTicket({
