@@ -88,8 +88,10 @@ interface TaskDetailPanelProps {
 export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetailPanelProps) {
   const { toast } = useToast();
   const { selectedBusinessId, selectedRepositoryId, setSelectedRepositoryId, setCurrentView, setReviewIntent } = useAppState();
+  const isCoolDispatch = task.source === "cool_dispatch";
   const [detectingFiles, setDetectingFiles] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "discussion">("details");
+  const [coolDispatchTriggered, setCoolDispatchTriggered] = useState(false);
   const [discussionInput, setDiscussionInput] = useState("");
   const [autoAnalysisTriggered, setAutoAnalysisTriggered] = useState(false);
   const [autoAnalysisError, setAutoAnalysisError] = useState<string | null>(null);
@@ -147,7 +149,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
 
   const { data: discussion = [], isLoading: discussionLoading } = useQuery<DiscussionMessage[]>({
     queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"],
-    enabled: !!selectedBusinessId && activeTab === "discussion",
+    enabled: !!selectedBusinessId && (activeTab === "discussion" || isCoolDispatch),
     staleTime: 0, // Always refetch when tab opens to prevent stale data
   });
 
@@ -398,6 +400,32 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
       triggerAutoAnalysis();
     }
   }, [activeTab, discussionLoading, discussion.length, autoAnalysisTriggered, discussMutation.isPending, isStreaming, selectedBusinessId, task.autoAnalysisComplete, triggerAutoAnalysis]);
+
+  useEffect(() => {
+    if (
+      isCoolDispatch &&
+      !discussionLoading &&
+      discussion.length === 0 &&
+      !isStreaming &&
+      !coolDispatchTriggered &&
+      selectedBusinessId &&
+      (task.generatedPrompts?.length ?? 0) === 0
+    ) {
+      setCoolDispatchTriggered(true);
+      sendStreamingMessage({
+        message: `You are an AI dev assistant. This task was automatically created from a user-submitted bug report or feature request via the cool_dispatch pipeline.
+
+Task title: "${task.title}"
+Task description: ${task.description || "(no description)"}
+Task type: ${task.type}
+Priority: ${task.priority}
+
+Please provide:
+1. A brief 2-3 sentence summary of what needs to be done and why it matters.
+2. A complete, copy-paste-ready prompt for Cursor or Claude Code (wrapped in a code block) that a developer can use immediately to implement this fix or feature. Make the prompt highly specific, actionable, and include all relevant context from the task description.`,
+      });
+    }
+  }, [isCoolDispatch, discussionLoading, discussion.length, isStreaming, coolDispatchTriggered, selectedBusinessId, task.generatedPrompts, task.title, task.description, task.type, task.priority, sendStreamingMessage]);
 
   useEffect(() => {
     if (messagesEndRef.current && activeTab === "discussion") {
@@ -844,6 +872,126 @@ ${task.fixSteps}`;
       </div>
     );
   };
+
+  if (isCoolDispatch) {
+    return (
+      <div className="w-[520px] flex flex-col border-l border-border bg-background shrink-0" data-testid="cool-dispatch-panel">
+        <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-border">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-mono text-xs text-muted-foreground shrink-0" data-testid="detail-task-id">{task.id}</span>
+            <span className="text-sm font-medium truncate" data-testid="cool-dispatch-title">{task.title}</span>
+            <Badge
+              variant="outline"
+              className={`text-[10px] shrink-0 ${task.status === "Done" ? "border-green-500/40 text-green-500" : task.status === "In Progress" ? "border-blue-500/40 text-blue-500" : ""}`}
+              data-testid="cool-dispatch-status"
+            >
+              {task.status}
+            </Badge>
+          </div>
+          <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-detail">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+
+        <ScrollArea className="flex-1">
+          <div className="p-4 space-y-3">
+            {discussionLoading ? (
+              <div className="flex justify-center py-10">
+                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <>
+                {discussion.map((msg, i) => renderMessage(msg, i))}
+                {isStreaming && (
+                  <div className="flex gap-2">
+                    <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                      <Bot className="w-3.5 h-3.5 text-primary" />
+                    </div>
+                    <div className="flex-1 text-sm text-foreground">
+                      <ReactMarkdown className="prose prose-sm dark:prose-invert max-w-none text-sm">
+                        {streamingContent || "…"}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+                {!isStreaming && discussion.length === 0 && coolDispatchTriggered && (
+                  <div className="flex justify-center py-6">
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  </div>
+                )}
+                {!isStreaming && discussion.length === 0 && !coolDispatchTriggered && (
+                  <p className="text-xs text-muted-foreground text-center py-8">Generating prompt…</p>
+                )}
+              </>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+        </ScrollArea>
+
+        <div className="p-3 border-t border-border space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] gap-1"
+              data-testid="button-regenerate-prompt"
+              onClick={() => {
+                sendStreamingMessage({
+                  message: `Regenerate the Cursor/Claude Code prompt for this task from scratch.\n\nTask title: "${task.title}"\nTask description: ${task.description || "(no description)"}\nType: ${task.type} | Priority: ${task.priority}\n\nProvide:\n1. A 2-3 sentence summary of what needs to be done.\n2. A complete, copy-paste-ready prompt in a code block for Cursor or Claude Code.`,
+                });
+              }}
+              disabled={isStreaming}
+            >
+              <Sparkles className="w-3 h-3" />
+              Regenerate prompt
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] gap-1"
+              data-testid="button-review-code-cd"
+              onClick={handleReviewCode}
+              disabled={detectingFiles || isStreaming}
+            >
+              {detectingFiles ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileSearch className="w-3 h-3" />}
+              Review code
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] gap-1"
+              data-testid="button-mark-done-cd"
+              onClick={handleMarkAsDone}
+              disabled={statusMutation.isPending || task.status === "Done"}
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              Mark done
+            </Button>
+          </div>
+          <div className="flex items-end gap-2">
+            <Textarea
+              placeholder="Ask a follow-up or refine the prompt…"
+              value={discussionInput}
+              onChange={(e) => setDiscussionInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="min-h-[38px] max-h-[120px] resize-none text-xs"
+              rows={1}
+              data-testid="input-cool-dispatch-chat"
+            />
+            <Button
+              size="icon"
+              onClick={handleSendMessage}
+              disabled={isStreaming || !discussionInput.trim()}
+              className="shrink-0"
+              data-testid="button-send-cool-dispatch"
+            >
+              <Send className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`${activeTab === "discussion" ? "w-[520px]" : "w-[400px]"} flex flex-col border-l border-border bg-background shrink-0 transition-all duration-200`}>

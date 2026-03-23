@@ -17,6 +17,7 @@ The application follows a client-server architecture. The frontend is built with
 - **Task Management:** Comprehensive task tracking with status flows, priority, and optional linking to specific repositories and files. Includes features like bulk import and automatic repository linking for tasks.
 - **AI Business Manager:** An intelligent assistant providing business insights, alerts, and the ability to propose and execute actions (e.g., create tasks, update statuses) with user approval.
 - **Code Review & Analysis:** AI-powered code review and automatic task analysis that provides structured reports and facilitates generating actionable fix prompts.
+- **cool_dispatch Pipeline:** Anthropic-powered triage agent that converts raw ticket submissions into structured inbox items (pending_approval status), with editable approval cards and a dedicated chat-first task detail panel. Tasks created via this pipeline carry `source: "cool_dispatch"` and open in a streamlined chat view that auto-generates a Cursor/Claude Code prompt on first open.
 - **PWA Support:** Progressive Web App capabilities for installability and offline access.
 
 ## External Dependencies

@@ -3927,6 +3927,7 @@ Rules:
         await db.insert(tasksTable).values({
           id: taskId,
           projectId: resolvedProjectId,
+          source: "cool_dispatch",
           type: inboxItem.type === "Alert" ? "Bug" : inboxItem.type === "Docs" ? "Task" : (inboxItem.type as string),
           status: "Open",
           priority: inboxItem.priority,
@@ -4074,6 +4075,7 @@ Rules:
         await db.insert(tasksTable).values({
           id: taskId,
           projectId: resolvedProjectId,
+          source: "cool_dispatch",
           type: resolvedType,
           status: "Open",
           priority: resolvedPriority,
