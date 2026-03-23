@@ -459,9 +459,11 @@ export default function InboxView() {
     enabled: !!bizId,
   });
 
+  const HIDDEN_STATUSES = ["approved", "rejected"];
+
   const filteredItems = (() => {
     const items = statusFilter === "all"
-      ? inboxItems
+      ? inboxItems.filter((item) => !HIDDEN_STATUSES.includes(item.status))
       : inboxItems.filter((item) => item.status === statusFilter);
     return [...items].sort((a, b) => {
       if (a.status === "pending_approval" && b.status !== "pending_approval") return -1;
