@@ -72,6 +72,31 @@ import {
 
 import { DiffView } from "@/components/diff-view";
 
+function CodeBlockWithCopy({ children }: { children?: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const text = String(children ?? "").replace(/\n$/, "");
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <div className="relative group my-2">
+      <pre className="bg-zinc-900 dark:bg-zinc-950 text-zinc-100 rounded-md px-3 pt-3 pb-3 text-[11px] font-mono overflow-x-auto whitespace-pre-wrap leading-relaxed">
+        <code>{children}</code>
+      </pre>
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-zinc-700 hover:bg-zinc-600 rounded px-1.5 py-0.5 text-[10px] text-zinc-200 flex items-center gap-1"
+        data-testid="button-copy-code-block"
+      >
+        {copied ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        {copied ? "Copied!" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
 const priorityConfig: Record<string, { icon: typeof ArrowUp; color: string; label: string }> = {
   High: { icon: ArrowUp, color: "text-red-400", label: "High" },
   Medium: { icon: ArrowRight, color: "text-yellow-400", label: "Medium" },
@@ -88,7 +113,7 @@ interface TaskDetailPanelProps {
 export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetailPanelProps) {
   const { toast } = useToast();
   const { selectedBusinessId, selectedRepositoryId, setSelectedRepositoryId, setCurrentView, setReviewIntent } = useAppState();
-  const isCoolDispatch = task.source === "cool_dispatch";
+  const isCoolDispatch = true;
   const [detectingFiles, setDetectingFiles] = useState(false);
   const [activeTab, setActiveTab] = useState<"details" | "discussion">("details");
   const [coolDispatchTriggered, setCoolDispatchTriggered] = useState(false);
@@ -149,7 +174,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
 
   const { data: discussion = [], isLoading: discussionLoading } = useQuery<DiscussionMessage[]>({
     queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks", task.id, "discussion"],
-    enabled: !!selectedBusinessId && (activeTab === "discussion" || isCoolDispatch),
+    enabled: !!selectedBusinessId,
     staleTime: 0, // Always refetch when tab opens to prevent stale data
   });
 
@@ -403,32 +428,29 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
 
   useEffect(() => {
     if (
-      isCoolDispatch &&
       !discussionLoading &&
       discussion.length === 0 &&
       !isStreaming &&
       !coolDispatchTriggered &&
-      selectedBusinessId &&
-      (task.generatedPrompts?.length ?? 0) === 0
+      selectedBusinessId
     ) {
       setCoolDispatchTriggered(true);
       sendStreamingMessage({
-        message: `You are an AI dev assistant. This task was automatically created from a user-submitted bug report or feature request via the cool_dispatch pipeline.
+        message: `You are an expert software engineer. Generate a complete development prompt for the following task.
 
-Task title: "${task.title}"
-Task description: ${task.description || "(no description)"}
-Task type: ${task.type}
-Priority: ${task.priority}
+**Task:** ${task.title}
+**Type:** ${task.type} | **Priority:** ${task.priority}
+**Description:** ${task.description || "(no description provided)"}
 
-Please provide:
-1. A brief 2-3 sentence summary of what needs to be done and why it matters.
-2. A complete, copy-paste-ready prompt for Cursor or Claude Code (wrapped in a code block) that a developer can use immediately to implement this fix or feature. Make the prompt highly specific, actionable, and include all relevant context from the task description.`,
+Provide:
+1. A concise 2–3 sentence summary of what needs to be done and why it matters.
+2. A ready-to-use prompt in a fenced code block that a developer can paste directly into Cursor or Claude Code to implement this task. Make it specific, actionable, and include all relevant context.`,
       });
     }
-  }, [isCoolDispatch, discussionLoading, discussion.length, isStreaming, coolDispatchTriggered, selectedBusinessId, task.generatedPrompts, task.title, task.description, task.type, task.priority, sendStreamingMessage]);
+  }, [discussionLoading, discussion.length, isStreaming, coolDispatchTriggered, selectedBusinessId, task.title, task.description, task.type, task.priority, sendStreamingMessage]);
 
   useEffect(() => {
-    if (messagesEndRef.current && activeTab === "discussion") {
+    if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [discussion, activeTab, streamingContent]);
@@ -719,8 +741,19 @@ ${task.fixSteps}`;
               <span className="text-[10px] text-muted-foreground/50">{formatTime(msg.timestamp)}</span>
             </div>
             {msg.sender === "claude" ? (
-              <div className={`rounded-md p-3 text-left prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs [&_code]:text-[11px] [&_pre]:text-[11px] [&_pre]:bg-background [&_pre]:p-2 [&_pre]:rounded ${isAuto ? "bg-primary/5 border border-primary/10" : "bg-muted"}`}>
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              <div className={`rounded-md p-3 text-left prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs [&_code]:text-[11px] ${isAuto ? "bg-primary/5 border border-primary/10" : "bg-muted"}`}>
+                <ReactMarkdown
+                  components={{
+                    pre: ({ children }) => <>{children}</>,
+                    code: ({ node, className, children, ...rest }) => {
+                      const isBlock = !!(rest as any).style || String(children).includes("\n");
+                      if (isBlock || className) {
+                        return <CodeBlockWithCopy>{children}</CodeBlockWithCopy>;
+                      }
+                      return <code className="bg-zinc-900 text-zinc-100 rounded px-1 py-0.5 text-[11px] font-mono">{children}</code>;
+                    },
+                  }}
+                >{msg.content}</ReactMarkdown>
               </div>
             ) : (
               <div className="bg-primary/10 rounded-md p-3 text-sm whitespace-pre-wrap inline-block text-left max-w-[90%]">
@@ -908,9 +941,20 @@ ${task.fixSteps}`;
                       <Bot className="w-3.5 h-3.5 text-primary" />
                     </div>
                     <div className="flex-1 text-sm text-foreground">
-                      <ReactMarkdown className="prose prose-sm dark:prose-invert max-w-none text-sm">
-                        {streamingContent || "…"}
-                      </ReactMarkdown>
+                      <div className="prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs">
+                        <ReactMarkdown
+                          components={{
+                            pre: ({ children }) => <>{children}</>,
+                            code: ({ node, className, children, ...rest }) => {
+                              const isBlock = !!(rest as any).style || String(children).includes("\n");
+                              if (isBlock || className) {
+                                return <CodeBlockWithCopy>{children}</CodeBlockWithCopy>;
+                              }
+                              return <code className="bg-zinc-900 text-zinc-100 rounded px-1 py-0.5 text-[11px] font-mono">{children}</code>;
+                            },
+                          }}
+                        >{streamingContent || "…"}</ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 )}
