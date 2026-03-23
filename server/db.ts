@@ -26,6 +26,13 @@ export async function ensureSchemaUpToDate() {
       console.log("[db] Added missing column: tasks.dependencies");
     }
 
+    if (!taskExisting.has("source")) {
+      await client.query(
+        `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source varchar(30) NOT NULL DEFAULT ''`
+      );
+      console.log("[db] Added missing column: tasks.source");
+    }
+
     const mgrCols = await client.query(
       `SELECT column_name FROM information_schema.columns WHERE table_name = 'manager_messages'`
     );
