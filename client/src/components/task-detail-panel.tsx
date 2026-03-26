@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest, queryClient, safeJsonParse } from "@/lib/queryClient";
 import { useAppState } from "@/lib/store";
@@ -72,13 +72,14 @@ import {
 
 import { DiffView } from "@/components/diff-view";
 
-function CodeBlockWithCopy({ children }: { children?: React.ReactNode }) {
+function CodeBlockWithCopy({ children, onCopy }: { children?: React.ReactNode; onCopy?: () => void }) {
   const [copied, setCopied] = useState(false);
   const text = String(children ?? "").replace(/\n$/, "");
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+    onCopy?.();
   };
   return (
     <div className="relative group my-2">
@@ -481,6 +482,23 @@ Provide:
     },
   });
 
+  const handlePromptCopy = useCallback(() => {
+    if (task.status !== "In Progress" && task.status !== "Done") {
+      statusMutation.mutate("In Progress" as TaskStatus);
+    }
+  }, [task.status, statusMutation]);
+
+  const markdownComponents = useMemo(() => ({
+    pre: ({ children }: any) => <>{children}</>,
+    code: ({ node, className, children, ...rest }: any) => {
+      const isBlock = !!(rest as any).style || String(children).includes("\n");
+      if (isBlock || className) {
+        return <CodeBlockWithCopy onCopy={handlePromptCopy}>{children}</CodeBlockWithCopy>;
+      }
+      return <code className="bg-zinc-900 text-zinc-100 rounded px-1 py-0.5 text-[11px] font-mono">{children}</code>;
+    },
+  }), [handlePromptCopy]);
+
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     toast({ title: `${label} copied to clipboard` });
@@ -742,18 +760,7 @@ ${task.fixSteps}`;
             </div>
             {msg.sender === "claude" ? (
               <div className={`rounded-md p-3 text-left prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs [&_code]:text-[11px] ${isAuto ? "bg-primary/5 border border-primary/10" : "bg-muted"}`}>
-                <ReactMarkdown
-                  components={{
-                    pre: ({ children }) => <>{children}</>,
-                    code: ({ node, className, children, ...rest }) => {
-                      const isBlock = !!(rest as any).style || String(children).includes("\n");
-                      if (isBlock || className) {
-                        return <CodeBlockWithCopy>{children}</CodeBlockWithCopy>;
-                      }
-                      return <code className="bg-zinc-900 text-zinc-100 rounded px-1 py-0.5 text-[11px] font-mono">{children}</code>;
-                    },
-                  }}
-                >{msg.content}</ReactMarkdown>
+                <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
               </div>
             ) : (
               <div className="bg-primary/10 rounded-md p-3 text-sm whitespace-pre-wrap inline-block text-left max-w-[90%]">
@@ -942,18 +949,7 @@ ${task.fixSteps}`;
                     </div>
                     <div className="flex-1 text-sm text-foreground">
                       <div className="prose prose-sm dark:prose-invert max-w-none text-xs leading-relaxed [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_p]:text-xs [&_p]:mb-2 [&_li]:text-xs">
-                        <ReactMarkdown
-                          components={{
-                            pre: ({ children }) => <>{children}</>,
-                            code: ({ node, className, children, ...rest }) => {
-                              const isBlock = !!(rest as any).style || String(children).includes("\n");
-                              if (isBlock || className) {
-                                return <CodeBlockWithCopy>{children}</CodeBlockWithCopy>;
-                              }
-                              return <code className="bg-zinc-900 text-zinc-100 rounded px-1 py-0.5 text-[11px] font-mono">{children}</code>;
-                            },
-                          }}
-                        >{streamingContent || "…"}</ReactMarkdown>
+                        <ReactMarkdown components={markdownComponents}>{streamingContent || "…"}</ReactMarkdown>
                       </div>
                     </div>
                   </div>
