@@ -920,13 +920,29 @@ ${task.fixSteps}`;
           <div className="flex items-center gap-2 min-w-0">
             <span className="font-mono text-xs text-muted-foreground shrink-0" data-testid="detail-task-id">{task.id}</span>
             <span className="text-sm font-medium truncate" data-testid="cool-dispatch-title">{task.title}</span>
-            <Badge
-              variant="outline"
-              className={`text-[10px] shrink-0 ${task.status === "Done" ? "border-green-500/40 text-green-500" : task.status === "In Progress" ? "border-blue-500/40 text-blue-500" : ""}`}
-              data-testid="cool-dispatch-status"
+            <Select
+              value={task.status}
+              onValueChange={(val) => statusMutation.mutate(val as TaskStatus)}
+              disabled={statusMutation.isPending}
             >
-              {task.status}
-            </Badge>
+              <SelectTrigger
+                className={`h-5 text-[10px] px-1.5 border rounded shrink-0 w-auto gap-1 focus:ring-0 ${
+                  task.status === "Done" ? "border-green-500/40 text-green-500 bg-green-500/10" :
+                  task.status === "In Progress" ? "border-blue-500/40 text-blue-500 bg-blue-500/10" :
+                  task.status === "Quality Review" ? "border-yellow-500/40 text-yellow-500 bg-yellow-500/10" :
+                  "border-border text-muted-foreground"
+                }`}
+                data-testid="select-task-status"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Open">Open</SelectItem>
+                <SelectItem value="In Progress">In Progress</SelectItem>
+                <SelectItem value="Quality Review">Quality Review</SelectItem>
+                <SelectItem value="Done">Done</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-detail">
             <X className="w-4 h-4" />
