@@ -452,13 +452,14 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
       sendStreamingMessage({
         message: `You are an expert software engineer. Generate a complete development prompt for the following task.
 
+**Task ID:** ${task.id}
 **Task:** ${task.title}
 **Type:** ${task.type} | **Priority:** ${task.priority}
 **Description:** ${task.description || "(no description provided)"}
 
 Provide:
 1. A concise 2–3 sentence summary of what needs to be done and why it matters.
-2. A ready-to-use prompt in a fenced code block that a developer can paste directly into Cursor or Claude Code to implement this task. Make it specific, actionable, and include all relevant context.`,
+2. A ready-to-use prompt in a fenced code block that a developer can paste directly into Cursor or Claude Code to implement this task. Make it specific, actionable, include the task ID (${task.id}) as a reference at the top, and include all relevant context.`,
       });
     }
   }, [discussionLoading, discussion.length, isStreaming, coolDispatchTriggered, selectedBusinessId, task.title, task.description, task.type, task.priority, sendStreamingMessage]);
