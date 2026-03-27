@@ -643,6 +643,7 @@ function ProjectTasksView() {
 
       {selectedTask && (
         <TaskDetailPanel
+          key={selectedTask.id}
           task={selectedTask}
           projectId={selectedProjectId}
           onEdit={(t) => {

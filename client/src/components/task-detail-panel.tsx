@@ -132,6 +132,13 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
 
   const { data: repositories = [] } = useQuery<RepositorySafe[]>({
     queryKey: ["/api/businesses", selectedBusinessId, "repositories"],
@@ -304,6 +311,10 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
     }
 
     try {
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       const payload = {
         message: params.message,
         includeTaskContext: true,
@@ -319,6 +330,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           credentials: "include",
+          signal: controller.signal,
         }
       );
 
@@ -392,6 +404,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
         }
       }
     } catch (err: any) {
+      if (err?.name === "AbortError") return;
       setIsStreaming(false);
       setStreamingStage(null);
       setStreamingContent("");
