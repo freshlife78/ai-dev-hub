@@ -5,7 +5,7 @@ import { seedData } from "./seed";
 import { insertProjectSchema, insertTaskSchema, insertBusinessSchema, insertRepositorySchema, type InsertTask, type ManagerAction, type CodeFix, type CodeFixFile } from "@shared/schema";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Repository } from "@shared/schema";
-import { ticketsTable, inboxItemsTable, tasksTable, projectsTable, businessesTable } from "@shared/schema";
+import { ticketsTable, inboxItemsTable, tasksTable, projectsTable, businessesTable, repositoriesTable } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, ne } from "drizzle-orm";
 import crypto from "crypto";
@@ -4130,6 +4130,109 @@ Rules:
     } catch (err: any) {
       console.error("[inbox] ticket-action error:", err);
       res.status(500).json({ message: err.message || "Failed to process action" });
+    }
+  });
+
+  // ── GitHub Webhook ────────────────────────────────────────────────────────
+  app.post("/api/webhooks/github", async (req, res) => {
+    try {
+      // 1. Verify signature
+      const secret = process.env.GITHUB_WEBHOOK_SECRET;
+      const signature = req.headers["x-hub-signature-256"] as string | undefined;
+
+      if (!secret) {
+        console.error("[Webhook] GITHUB_WEBHOOK_SECRET is not set");
+        return res.status(500).json({ error: "Webhook secret not configured" });
+      }
+
+      if (!signature) {
+        return res.status(401).json({ error: "Missing x-hub-signature-256 header" });
+      }
+
+      const rawBody = req.rawBody as Buffer;
+      const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+
+      const sigBuf = Buffer.from(signature);
+      const expBuf = Buffer.from(expected);
+      if (
+        sigBuf.length !== expBuf.length ||
+        !crypto.timingSafeEqual(sigBuf, expBuf)
+      ) {
+        return res.status(401).json({ error: "Invalid signature" });
+      }
+
+      // 2. Only handle push events
+      const event = req.headers["x-github-event"];
+      if (event !== "push") {
+        return res.json({ ignored: true, event });
+      }
+
+      // 3. Match the repo
+      const payload = req.body;
+      const owner: string = payload?.repository?.owner?.login || payload?.repository?.owner?.name || "";
+      const repoName: string = payload?.repository?.name || "";
+
+      if (!owner || !repoName) {
+        return res.json({ ignored: true, reason: "Could not parse repository info from payload" });
+      }
+
+      const [matchedRepo] = await db
+        .select()
+        .from(repositoriesTable)
+        .where(and(eq(repositoriesTable.owner, owner), eq(repositoriesTable.repo, repoName)));
+
+      if (!matchedRepo) {
+        console.log(`[Webhook] No matching repository for ${owner}/${repoName}`);
+        return res.json({ ignored: true, reason: `No repository matched ${owner}/${repoName}` });
+      }
+
+      // 4. Parse task IDs from commit messages
+      const commits: Array<{ id?: string; message?: string }> = payload?.commits || [];
+      const taskIdPattern = /\[([A-Z]+-\d+)\]/g;
+      const taskIds = new Set<string>();
+
+      for (const commit of commits) {
+        const message = commit.message || "";
+        let match: RegExpExecArray | null;
+        taskIdPattern.lastIndex = 0;
+        while ((match = taskIdPattern.exec(message)) !== null) {
+          taskIds.add(match[1]);
+        }
+      }
+
+      // 5. Update matching tasks
+      const updated: string[] = [];
+      const skipped: string[] = [];
+      const notFound: string[] = [];
+      const firstCommitSha = commits[0]?.id?.slice(0, 7) || "unknown";
+
+      for (const taskId of taskIds) {
+        try {
+          const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+
+          if (!task) {
+            notFound.push(taskId);
+            continue;
+          }
+
+          if (task.status === "Done") {
+            skipped.push(taskId);
+            continue;
+          }
+
+          await db.update(tasksTable).set({ status: "Quality Review" }).where(eq(tasksTable.id, taskId));
+          console.log(`[Webhook] Task ${taskId} moved to Quality Review (commit ${firstCommitSha})`);
+          updated.push(taskId);
+        } catch (taskErr) {
+          console.error(`[Webhook] Error updating task ${taskId}:`, taskErr);
+          skipped.push(taskId);
+        }
+      }
+
+      return res.json({ updated, skipped, notFound });
+    } catch (err: any) {
+      console.error("[Webhook] Error processing GitHub webhook:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
   });
 
