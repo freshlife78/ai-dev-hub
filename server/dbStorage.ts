@@ -346,9 +346,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTask(projectId: string, data: InsertTask, customId?: string): Promise<Task> {
-    const existingTasks = await this.getTasks(projectId);
-    const existingIds = new Set(existingTasks.map(t => t.id));
-    const id = customId && !existingIds.has(customId) ? customId : generateTaskId(data.type, existingTasks);
+    // Use all tasks globally for ID generation to prevent cross-project duplicates
+    const allTasks = await db.select({ id: tasksTable.id }).from(tasksTable);
+    const allTaskObjects = allTasks.map(t => ({ id: t.id } as Task));
+    const existingIds = new Set(allTasks.map(t => t.id));
+    const id = customId && !existingIds.has(customId) ? customId : generateTaskId(data.type, allTaskObjects);
     const task: Task = {
       id, projectId, repositoryId: data.repositoryId || "", type: data.type,
       status: data.status || "Open", priority: data.priority || "Medium",

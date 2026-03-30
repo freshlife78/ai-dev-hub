@@ -31,7 +31,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Plus, Loader2, FileSearch } from "lucide-react";
+import { Plus, Loader2, FileSearch, AlertCircle } from "lucide-react";
 import type { Task, Project, RepositorySafe } from "@shared/schema";
 
 function getProjectDefaultRepo(projects: Project[], projectId: string): string {
@@ -69,6 +69,7 @@ export function TaskDialog({ open, onOpenChange, projectId: initialProjectId, ta
   const { selectedBusinessId } = useAppState();
   const isEditing = !!task;
   const [activeProjectId, setActiveProjectId] = useState(initialProjectId);
+  const [conflictError, setConflictError] = useState<string | null>(null);
   const [showInlineCreate, setShowInlineCreate] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectColor, setNewProjectColor] = useState(COLORS[0]);
@@ -107,6 +108,7 @@ export function TaskDialog({ open, onOpenChange, projectId: initialProjectId, ta
 
     if (open && (justOpened || taskChanged || !prevTaskId.current)) {
       setActiveProjectId(initialProjectId);
+      setConflictError(null);
       setShowInlineCreate(false);
       setNewProjectName("");
       setNewProjectColor(COLORS[0]);
@@ -157,6 +159,7 @@ export function TaskDialog({ open, onOpenChange, projectId: initialProjectId, ta
       return apiRequest("POST", `/api/businesses/${selectedBusinessId}/projects/${activeProjectId}/tasks`, data);
     },
     onSuccess: () => {
+      setConflictError(null);
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", activeProjectId, "tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "changelog"] });
       queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
@@ -165,7 +168,13 @@ export function TaskDialog({ open, onOpenChange, projectId: initialProjectId, ta
       onOpenChange(false);
     },
     onError: (err: Error) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      if (err.message.startsWith("409:")) {
+        const detail = err.message.replace(/^409:\s*/, "");
+        setConflictError(detail);
+      } else {
+        setConflictError(null);
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      }
     },
   });
 
@@ -226,6 +235,15 @@ export function TaskDialog({ open, onOpenChange, projectId: initialProjectId, ta
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {conflictError && (
+              <div
+                className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                data-testid="alert-task-conflict"
+              >
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{conflictError}</span>
+              </div>
+            )}
             {!isEditing && (
               <div className="space-y-2">
                 <label className="text-sm font-medium">Project</label>

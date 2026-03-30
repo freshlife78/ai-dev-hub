@@ -101,6 +101,49 @@ export async function ensureSchemaUpToDate() {
       console.log("[db] Added missing column: manager_messages.code_fix");
     }
 
+    // ── tasks: unique constraint on id ────────────────────────────────────
+    // 1. Resolve any existing duplicates before adding the constraint
+    const constraintCheck = await client.query(
+      `SELECT 1 FROM pg_indexes WHERE tablename = 'tasks' AND indexname = 'tasks_id_unique'`
+    );
+    if (constraintCheck.rows.length === 0) {
+      // Find all duplicate task IDs
+      const dupRows = await client.query<{ id: string }>(
+        `SELECT id FROM tasks GROUP BY id HAVING COUNT(*) > 1`
+      );
+      for (const { id } of dupRows.rows) {
+        // Find all occurrences ordered by project_id; keep the first, rename the rest
+        const occurrences = await client.query<{ project_id: string }>(
+          `SELECT project_id FROM tasks WHERE id = $1 ORDER BY project_id`,
+          [id]
+        );
+        // Get the max numeric suffix across all tasks with the same prefix
+        const prefix = id.split("-")[0];
+        const maxRow = await client.query<{ maxnum: string }>(
+          `SELECT COALESCE(MAX(CAST(SPLIT_PART(id, '-', 2) AS INT)), 0) AS maxnum
+           FROM tasks WHERE id ~ $1`,
+          [`^${prefix}-[0-9]+$`]
+        );
+        let counter = parseInt(maxRow.rows[0]?.maxnum || "0", 10);
+
+        // Skip first occurrence; rename each subsequent one
+        for (let i = 1; i < occurrences.rows.length; i++) {
+          counter++;
+          const newId = `${prefix}-${String(counter).padStart(3, "0")}`;
+          const projectId = occurrences.rows[i].project_id;
+          await client.query(
+            `UPDATE tasks SET id = $1 WHERE id = $2 AND project_id = $3`,
+            [newId, id, projectId]
+          );
+          console.log(`[db] Duplicate task ID resolved: "${id}" → "${newId}" (project: ${projectId})`);
+        }
+      }
+
+      // Now add the unique constraint (safe: no duplicates remain)
+      await client.query(`ALTER TABLE tasks ADD CONSTRAINT tasks_id_unique UNIQUE (id)`);
+      console.log("[db] Added unique constraint: tasks.id");
+    }
+
     // ── tickets ────────────────────────────────────────────────────────────
     const ticketsExists = await client.query(
       `SELECT to_regclass('public.tickets') AS cls`

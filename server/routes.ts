@@ -431,6 +431,10 @@ export async function registerRoutes(
       const task = await storage.createTask(req.params.projectId, data);
       res.status(201).json(task);
     } catch (err: any) {
+      // PostgreSQL unique constraint violation
+      if (err.code === "23505") {
+        return res.status(409).json({ message: "Task ID already exists. Please use a unique ID." });
+      }
       res.status(400).json({ message: err.message });
     }
   });
