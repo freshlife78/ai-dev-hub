@@ -4323,14 +4323,50 @@ Rules:
         return res.status(401).json({ error: "Invalid signature" });
       }
 
-      // 2. Only handle push events
+      // 2. Route by event type
       const event = req.headers["x-github-event"];
+      const payload = req.body;
+
+      // ── PR merge handler (primary flow) ───────────────────────────────────
+      if (event === "pull_request") {
+        console.log("[Webhook] PR merge event");
+
+        if (payload?.action !== "closed" || payload?.pull_request?.merged !== true) {
+          return res.json({ ignored: true, reason: "PR not merged" });
+        }
+
+        const branchRef: string = payload?.pull_request?.head?.ref || "";
+        const rawId = branchRef.split("/")[0].toUpperCase();
+
+        if (!rawId || !/^[A-Z]+-\d+$/.test(rawId)) {
+          return res.json({ ignored: true, reason: `Branch name "${branchRef}" does not contain a recognisable task ID` });
+        }
+
+        const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, rawId));
+
+        if (!task) {
+          console.log(`[Webhook] PR merge: task ${rawId} not found`);
+          return res.json({ ignored: true, reason: `Task ${rawId} not found` });
+        }
+
+        if (task.status === "Done") {
+          console.log(`[Webhook] PR merge: task ${rawId} already Done, skipping`);
+          return res.json({ ignored: true, reason: `Task ${rawId} is already Done` });
+        }
+
+        await db.update(tasksTable).set({ status: "Quality Review" }).where(eq(tasksTable.id, rawId));
+        console.log(`[Webhook] PR merged: Task ${rawId} moved to Quality Review`);
+        return res.json({ updated: [rawId] });
+      }
+
+      // ── Push handler (fallback for direct commits with [TASK-ID]) ─────────
       if (event !== "push") {
         return res.json({ ignored: true, event });
       }
 
+      console.log("[Webhook] Push event");
+
       // 3. Match the repo
-      const payload = req.body;
       const owner: string = payload?.repository?.owner?.login || payload?.repository?.owner?.name || "";
       const repoName: string = payload?.repository?.name || "";
 
