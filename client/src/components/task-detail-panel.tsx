@@ -1085,25 +1085,33 @@ ${task.fixSteps}`;
           </div>
           {startWorkResult && (
             <div
-              className="flex items-center gap-2 rounded-md border border-emerald-600/30 bg-emerald-600/5 dark:border-emerald-400/30 dark:bg-emerald-400/5 px-2.5 py-1.5"
+              className="rounded-md border border-emerald-600/30 bg-emerald-600/5 dark:border-emerald-400/30 dark:bg-emerald-400/5 px-2.5 py-1.5 space-y-1"
               data-testid="banner-start-work-success"
             >
-              <GitBranch className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <code className="flex-1 text-[10px] font-mono text-emerald-700 dark:text-emerald-300 break-all">
-                git fetch origin && git checkout {startWorkResult.branch}
-              </code>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600/10"
-                data-testid="button-copy-start-work-command"
-                onClick={() => {
-                  navigator.clipboard.writeText(`git fetch origin && git checkout ${startWorkResult.branch}`);
-                  toast({ title: "Copied to clipboard" });
-                }}
-              >
-                <Copy className="w-3 h-3" />
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <GitBranch className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300">Branch created</span>
+                <code className="text-[10px] font-mono text-emerald-700 dark:text-emerald-300 bg-emerald-600/10 dark:bg-emerald-400/10 px-1 rounded truncate">
+                  {startWorkResult.branch}
+                </code>
+              </div>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 text-[10px] font-mono text-emerald-700 dark:text-emerald-300 break-all">
+                  git fetch origin && git checkout {startWorkResult.branch}
+                </code>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600/10"
+                  data-testid="button-copy-start-work-command"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`git fetch origin && git checkout ${startWorkResult.branch}`);
+                    toast({ title: "Copied to clipboard" });
+                  }}
+                >
+                  <Copy className="w-3 h-3" />
+                </Button>
+              </div>
             </div>
           )}
           <div className="flex items-end gap-2">

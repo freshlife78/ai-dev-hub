@@ -485,7 +485,7 @@ export async function registerRoutes(
           .replace(/-$/, "")
           .slice(0, 50);
 
-      const branchName = `${task.id.toLowerCase()}/${slugifyTitle(task.title)}`;
+      const branchName = `${task.id.toLowerCase()}/${slugifyTitle(task.title) || "task"}`;
 
       const headers = {
         Authorization: `token ${repo.token}`,
