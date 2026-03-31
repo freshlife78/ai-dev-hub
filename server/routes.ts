@@ -457,6 +457,164 @@ export async function registerRoutes(
     res.json({ success: true });
   });
 
+  app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/start-work", async (req, res) => {
+    try {
+      const task = await storage.getTask(req.params.projectId, req.params.taskId);
+      if (!task) return res.status(404).json({ message: "Task not found" });
+
+      if (task.status !== "Open") {
+        return res.status(409).json({ message: `Task is already "${task.status}". Only Open tasks can be started.` });
+      }
+
+      if (!task.repositoryId) {
+        return res.status(400).json({ message: "Task has no linked repository. Link a repository first." });
+      }
+
+      const repo = await storage.getRepositoryWithToken(task.repositoryId);
+      if (!repo) return res.status(400).json({ message: "Repository not found." });
+      if (!repo.token) return res.status(400).json({ message: "No GitHub token configured for this repository." });
+      if (!repo.owner || !repo.repo) return res.status(400).json({ message: "Repository owner/name not configured." });
+
+      const slugifyTitle = (title: string): string =>
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9\s-]/g, "")
+          .trim()
+          .replace(/\s+/g, "-")
+          .replace(/-+/g, "-")
+          .replace(/-$/, "")
+          .slice(0, 50);
+
+      const branchName = `${task.id.toLowerCase()}/${slugifyTitle(task.title)}`;
+
+      const headers = {
+        Authorization: `token ${repo.token}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "AI-Dev-Hub",
+        "Content-Type": "application/json",
+      };
+
+      const repoRes = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.repo}`, { headers });
+      if (!repoRes.ok) {
+        const err = await repoRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to fetch repository info from GitHub." });
+      }
+      const repoInfo = await repoRes.json() as any;
+      const defaultBranch = repoInfo.default_branch || "main";
+
+      const refRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs/heads/${defaultBranch}`,
+        { headers }
+      );
+      if (!refRes.ok) {
+        const err = await refRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to get main branch reference." });
+      }
+      const refData = await refRes.json() as any;
+      const mainSha = refData.object.sha;
+
+      const createBranchRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: mainSha }),
+        }
+      );
+      if (!createBranchRes.ok) {
+        const err = await createBranchRes.json().catch(() => ({})) as any;
+        if (createBranchRes.status === 422) {
+          return res.status(409).json({ message: "Branch already exists. This task may already be in progress." });
+        }
+        return res.status(500).json({ message: err.message || "Failed to create branch." });
+      }
+
+      const sections: string[] = [`# ${task.id}: ${task.title}`, ""];
+      sections.push(`**Priority:** ${task.priority}  |  **Type:** ${task.type}`, "");
+      if (task.description) { sections.push("## Description", task.description, ""); }
+      if (task.replitPrompt) { sections.push("## Prompt", task.replitPrompt, ""); }
+      if (task.fixSteps) { sections.push("## Fix Steps", task.fixSteps, ""); }
+      if (task.filePath) { sections.push("## Files", task.filePath, ""); }
+      sections.push(
+        "---",
+        `*Remember: include \`[${task.id}]\` in your commit message so this task is auto-advanced to Quality Review.*`
+      );
+      const fileContent = sections.join("\n");
+      const taskFilePath = `.tasks/${task.id}.md`;
+
+      const blobRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/blobs`,
+        { method: "POST", headers, body: JSON.stringify({ content: fileContent, encoding: "utf-8" }) }
+      );
+      if (!blobRes.ok) {
+        const err = await blobRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to create blob." });
+      }
+      const blobSha = ((await blobRes.json()) as any).sha;
+
+      const treeRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees/${mainSha}`,
+        { headers }
+      );
+      if (!treeRes.ok) {
+        const err = await treeRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to get tree." });
+      }
+      const treeSha = ((await treeRes.json()) as any).sha;
+
+      const newTreeRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/trees`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            base_tree: treeSha,
+            tree: [{ path: taskFilePath, mode: "100644", type: "blob", sha: blobSha }],
+          }),
+        }
+      );
+      if (!newTreeRes.ok) {
+        const err = await newTreeRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to create new tree." });
+      }
+      const newTreeSha = ((await newTreeRes.json()) as any).sha;
+
+      const commitRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/commits`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            message: `chore: add task context file for ${task.id}`,
+            tree: newTreeSha,
+            parents: [mainSha],
+          }),
+        }
+      );
+      if (!commitRes.ok) {
+        const err = await commitRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to create commit." });
+      }
+      const commitSha = ((await commitRes.json()) as any).sha;
+
+      const updateRefRes = await fetch(
+        `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/refs/heads/${branchName}`,
+        { method: "PATCH", headers, body: JSON.stringify({ sha: commitSha }) }
+      );
+      if (!updateRefRes.ok) {
+        const err = await updateRefRes.json().catch(() => ({})) as any;
+        return res.status(500).json({ message: err.message || "Failed to update branch ref." });
+      }
+
+      await storage.updateTask(req.params.projectId, task.id, { status: "In Progress" }, req.params.bizId);
+
+      return res.json({ success: true, branch: branchName, taskFile: taskFilePath });
+    } catch (err: any) {
+      console.error("[start-work] Error:", err);
+      return res.status(500).json({ message: err.message || "Failed to start work." });
+    }
+  });
+
   app.post("/api/businesses/:bizId/projects/:projectId/tasks/:taskId/move", async (req, res) => {
     const { targetProjectId } = req.body;
     if (!targetProjectId) return res.status(400).json({ message: "targetProjectId is required" });

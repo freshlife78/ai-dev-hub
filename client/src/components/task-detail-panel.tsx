@@ -127,6 +127,7 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
   const [branchNameInput, setBranchNameInput] = useState("");
   const [prCreatingFixId, setPrCreatingFixId] = useState<string | null>(null);
+  const [startWorkResult, setStartWorkResult] = useState<{ branch: string; taskFile: string } | null>(null);
   const [linkingOpen, setLinkingOpen] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingStage, setStreamingStage] = useState<string | null>(null);
@@ -177,6 +178,29 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
     },
     onError: (err: any) => {
       toast({ title: "Failed to unlink", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const startWorkMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "POST",
+        `/api/businesses/${selectedBusinessId}/projects/${projectId}/tasks/${task.id}/start-work`,
+        {}
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ message: "Failed to start work." }));
+        throw new Error(err.message || "Failed to start work.");
+      }
+      return await res.json() as { branch: string; taskFile: string };
+    },
+    onSuccess: (data) => {
+      setStartWorkResult(data);
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "projects", projectId, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/businesses", selectedBusinessId, "tasks"] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Start Work failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -477,6 +501,7 @@ Provide:
     setAutoAnalysisTriggered(false);
     setAutoAnalysisError(null);
     setPromptsExpanded(false);
+    setStartWorkResult(null);
   }, [task.id]);
 
   const taskRepo = task.repositoryId ? repositories.find((r) => r.id === task.repositoryId) : null;
@@ -1040,7 +1065,47 @@ ${task.fixSteps}`;
               <CheckCircle2 className="w-3 h-3" />
               Mark done
             </Button>
+            {task.status === "Open" && task.repositoryId && !startWorkResult && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 text-[10px] gap-1 border-emerald-600/40 text-emerald-600 hover:bg-emerald-600/10 dark:text-emerald-400 dark:border-emerald-400/40 dark:hover:bg-emerald-400/10"
+                data-testid="button-start-work"
+                onClick={() => startWorkMutation.mutate()}
+                disabled={startWorkMutation.isPending}
+              >
+                {startWorkMutation.isPending ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <GitBranch className="w-3 h-3" />
+                )}
+                {startWorkMutation.isPending ? "Creating branch…" : "Start work"}
+              </Button>
+            )}
           </div>
+          {startWorkResult && (
+            <div
+              className="flex items-center gap-2 rounded-md border border-emerald-600/30 bg-emerald-600/5 dark:border-emerald-400/30 dark:bg-emerald-400/5 px-2.5 py-1.5"
+              data-testid="banner-start-work-success"
+            >
+              <GitBranch className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <code className="flex-1 text-[10px] font-mono text-emerald-700 dark:text-emerald-300 break-all">
+                git fetch origin && git checkout {startWorkResult.branch}
+              </code>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-600/10"
+                data-testid="button-copy-start-work-command"
+                onClick={() => {
+                  navigator.clipboard.writeText(`git fetch origin && git checkout ${startWorkResult.branch}`);
+                  toast({ title: "Copied to clipboard" });
+                }}
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <Textarea
               placeholder="Ask a follow-up or refine the prompt…"
