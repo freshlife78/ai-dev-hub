@@ -459,7 +459,10 @@ export function TaskDetailPanel({ task, projectId, onEdit, onClose }: TaskDetail
 
 Provide:
 1. A concise 2–3 sentence summary of what needs to be done and why it matters.
-2. A ready-to-use prompt in a fenced code block that a developer can paste directly into Cursor or Claude Code to implement this task. Make it specific, actionable, include the task ID (${task.id}) as a reference at the top, and include all relevant context.`,
+2. A ready-to-use prompt in a fenced code block that a developer can paste directly into Cursor or Claude Code to implement this task. The fenced code block MUST:
+   - Start with exactly this line: "Task ID: ${task.id}"
+   - Be specific, actionable, and include all relevant context from the task description
+   - End with exactly this line: "IMPORTANT: When committing, include [${task.id}] in your commit message so this task is automatically moved to Quality Review."`,
       });
     }
   }, [discussionLoading, discussion.length, isStreaming, coolDispatchTriggered, selectedBusinessId, task.title, task.description, task.type, task.priority, sendStreamingMessage]);
@@ -1007,7 +1010,7 @@ ${task.fixSteps}`;
               data-testid="button-regenerate-prompt"
               onClick={() => {
                 sendStreamingMessage({
-                  message: `Regenerate the Cursor/Claude Code prompt for this task from scratch.\n\nTask title: "${task.title}"\nTask description: ${task.description || "(no description)"}\nType: ${task.type} | Priority: ${task.priority}\n\nProvide:\n1. A 2-3 sentence summary of what needs to be done.\n2. A complete, copy-paste-ready prompt in a code block for Cursor or Claude Code.`,
+                  message: `Regenerate the Cursor/Claude Code prompt for this task from scratch.\n\nTask ID: ${task.id}\nTask title: "${task.title}"\nTask description: ${task.description || "(no description)"}\nType: ${task.type} | Priority: ${task.priority}\n\nProvide:\n1. A 2-3 sentence summary of what needs to be done.\n2. A complete, copy-paste-ready prompt in a fenced code block for Cursor or Claude Code. The fenced code block MUST:\n   - Start with exactly this line: "Task ID: ${task.id}"\n   - Be specific, actionable, and include all relevant context\n   - End with exactly this line: "IMPORTANT: When committing, include [${task.id}] in your commit message so this task is automatically moved to Quality Review."`,
                 });
               }}
               disabled={isStreaming}
